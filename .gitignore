@@ -1,0 +1,31 @@
+# ---- Secrets: NEVER commit these ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+service-account*.json
+
+# ---- Personal data: belongs in DB/storage, not Git ----
+/uploads/
+/storage/
+/backups/
+*.sqlite
+*.db
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ---- Node / Next.js ----
+node_modules/
+.next/
+out/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
