@@ -3,9 +3,11 @@ AI Work Memory — backend entry point.
 """
 
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.api.memories import router as memories_router
 from app.db.session import get_db
 
 app = FastAPI(
@@ -14,13 +16,26 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# The frontend runs on a different port, so the browser treats it as
+# a different origin and blocks requests unless we allow them.
+# Wide open in development; tightened in Phase 17.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(memories_router)
+
 
 @app.get("/")
 def read_root():
     return {
         "app": "AI Work Memory — My Second Brain",
         "status": "running",
-        "phase": 2,
+        "phase": 3,
     }
 
 
@@ -31,15 +46,8 @@ def health_check():
 
 @app.get("/health/db")
 def database_health(db: Session = Depends(get_db)):
-    """
-    Confirms the backend can actually reach PostgreSQL.
-
-    Depends(get_db) is FastAPI's dependency injection: it runs
-    get_db(), hands us the session, and closes it afterwards.
-    """
     try:
         version = db.execute(text("SELECT version()")).scalar()
         return {"database": "connected", "version": version}
     except Exception as exc:
-        # Never let a database failure look like success.
         return {"database": "unreachable", "error": str(exc)}
