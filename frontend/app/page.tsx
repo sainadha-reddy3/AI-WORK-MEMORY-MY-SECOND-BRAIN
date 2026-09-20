@@ -1,4 +1,46 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { createMemory, listMemories, type Memory } from "@/lib/api";
+
 export default function Home() {
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load existing memories once when the page opens.
+  useEffect(() => {
+    listMemories()
+      .then(setMemories)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleSave() {
+    const text = input.trim();
+    if (!text) return;
+
+    setSaving(true);
+    setError(null);
+    try {
+      const created = await createMemory({
+        occurred_on: new Date().toISOString().slice(0, 10),
+        // First line becomes the title, for now. Phase 4 lets the AI
+        // do this properly.
+        title: text.split("\n")[0].slice(0, 200),
+        content: text,
+      });
+      setMemories([created, ...memories]);
+      setInput("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="flex h-screen flex-col bg-[#0b1020] text-slate-200">
 
@@ -45,20 +87,16 @@ export default function Home() {
           <NavItem label="➕ Add Memory" />
 
           <SectionLabel text="MY MEMORY" />
-          <NavItem label="📅 Today" count={0} />
-          <NavItem label="📅 Yesterday" count={0} />
-          <NavItem label="📅 This Week" count={0} />
-          <NavItem label="📅 This Month" count={0} />
+          <NavItem label="📚 All Memories" count={memories.length} />
 
           <SectionLabel text="PROJECTS / TOPICS" />
-          <p className="px-2 text-xs text-slate-600">No topics yet</p>
-
-          <SectionLabel text="TYPES" />
-          <NavItem label="📝 Notes" count={0} />
-          <NavItem label="🖼️ Screenshots" count={0} />
-          <NavItem label="📄 Documents" count={0} />
-          <NavItem label="💻 Code Snippets" count={0} />
-          <NavItem label="🎤 Meetings" count={0} />
+          {topicCounts(memories).length === 0 ? (
+            <p className="px-2 text-xs text-slate-600">No topics yet</p>
+          ) : (
+            topicCounts(memories).map(([topic, n]) => (
+              <NavItem key={topic} label={`# ${topic}`} count={n} />
+            ))
+          )}
         </aside>
 
         {/* CENTER */}
@@ -70,31 +108,52 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="flex flex-1 items-center justify-center overflow-y-auto p-6">
-            <div className="text-center">
-              <div className="mb-3 text-4xl">🧠</div>
-              <p className="text-sm text-slate-400">
-                Your memory is empty.
-              </p>
-              <p className="mt-1 text-xs text-slate-600">
-                Tell me what you worked on today and I&apos;ll remember it.
-              </p>
-            </div>
+          <div className="flex-1 overflow-y-auto p-6">
+            {loading ? (
+              <p className="text-center text-sm text-slate-500">Loading…</p>
+            ) : memories.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-center">
+                <div>
+                  <div className="mb-3 text-4xl">🧠</div>
+                  <p className="text-sm text-slate-400">Your memory is empty.</p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Tell me what you worked on today and I&apos;ll remember it.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {memories.map((m) => (
+                  <MemoryCard key={m.id} memory={m} />
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="border-t border-slate-800 p-4">
+            {error && (
+              <p className="mb-2 rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+                {error}
+              </p>
+            )}
             <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
               <textarea
                 rows={2}
-                placeholder="Ask anything, or add a new memory..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="What did you work on? e.g. Fixed an ArgoCD sync failure..."
                 className="w-full resize-none bg-transparent text-sm placeholder-slate-500 outline-none"
               />
               <div className="mt-2 flex items-center gap-2">
                 <Chip label="📎 Attach" />
                 <Chip label="🖼️ Screenshot" />
                 <Chip label="🎤 Voice" />
-                <button className="ml-auto rounded-lg bg-indigo-600 px-4 py-1.5 text-sm text-white">
-                  Send
+                <button
+                  onClick={handleSave}
+                  disabled={saving || !input.trim()}
+                  className="ml-auto rounded-lg bg-indigo-600 px-4 py-1.5 text-sm text-white disabled:opacity-40"
+                >
+                  {saving ? "Saving…" : "Save"}
                 </button>
               </div>
             </div>
@@ -124,12 +183,57 @@ export default function Home() {
   );
 }
 
-/* ---------- small building blocks ---------- */
+/* ---------- helpers ---------- */
+
+function topicCounts(memories: Memory[]): [string, number][] {
+  const counts = new Map<string, number>();
+  for (const m of memories) {
+    for (const t of m.topics) counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function MemoryCard({ memory }: { memory: Memory }) {
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-4">
+      <div className="mb-1 flex items-center gap-2">
+        <span className="text-xs text-slate-500">{memory.occurred_on}</span>
+        <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
+          {memory.memory_type}
+        </span>
+        {memory.confidence === "uncertain" && (
+          <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] text-amber-300">
+            uncertain
+          </span>
+        )}
+      </div>
+      <h4 className="text-sm font-medium text-white">{memory.title}</h4>
+      <p className="mt-1 text-xs leading-relaxed text-slate-400">
+        {memory.content}
+      </p>
+      {memory.topics.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {memory.topics.map((t) => (
+            <span
+              key={t}
+              className="rounded bg-indigo-950/60 px-1.5 py-0.5 text-[10px] text-indigo-300"
+            >
+              #{t}
+            </span>
+          ))}
+        </div>
+      )}
+      <p className="mt-2 text-[10px] text-slate-600">
+        Source: {memory.evidence.map((e) => e.source_type).join(", ") || "none"}
+      </p>
+    </div>
+  );
+}
 
 function NavItem({ label, count }: { label: string; count?: number }) {
   return (
     <div className="flex cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800/60">
-      <span>{label}</span>
+      <span className="truncate">{label}</span>
       {count !== undefined && (
         <span className="text-xs text-slate-500">{count}</span>
       )}
