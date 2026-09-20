@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createMemory, listMemories, type Memory } from "@/lib/api";
+import {
+  captureMemory,
+  listMemories,
+  type CapturePreview,
+  type Memory,
+} from "@/lib/api";
 
 export default function Home() {
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -9,6 +14,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastPreview, setLastPreview] = useState<CapturePreview | null>(null);
 
   // Load existing memories once when the page opens.
   useEffect(() => {
@@ -25,14 +31,10 @@ export default function Home() {
     setSaving(true);
     setError(null);
     try {
-      const created = await createMemory({
-        occurred_on: new Date().toISOString().slice(0, 10),
-        // First line becomes the title, for now. Phase 4 lets the AI
-        // do this properly.
-        title: text.split("\n")[0].slice(0, 200),
-        content: text,
-      });
-      setMemories([created, ...memories]);
+      // The AI proposes structure — we no longer send a title or type.
+      const { memory, preview } = await captureMemory(text);
+      setMemories([memory, ...memories]);
+      setLastPreview(preview);
       setInput("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
@@ -162,12 +164,18 @@ export default function Home() {
 
         {/* RIGHT */}
         <aside className="w-80 shrink-0 overflow-y-auto border-l border-slate-800 p-4">
-          <h3 className="mb-3 text-sm font-semibold text-white">Related Memory</h3>
-          <div className="rounded-lg border border-slate-800 p-4 text-center">
-            <p className="text-xs text-slate-500">
-              Related memories will appear here as you chat.
-            </p>
-          </div>
+          <h3 className="mb-3 text-sm font-semibold text-white">
+            What the AI understood
+          </h3>
+          {lastPreview ? (
+            <PreviewPanel preview={lastPreview} />
+          ) : (
+            <div className="rounded-lg border border-slate-800 p-4 text-center">
+              <p className="text-xs text-slate-500">
+                Save a memory to see what was extracted.
+              </p>
+            </div>
+          )}
 
           <h3 className="mb-3 mt-6 text-sm font-semibold text-white">Studio</h3>
           <div className="grid grid-cols-2 gap-2">
@@ -191,6 +199,77 @@ function topicCounts(memories: Memory[]): [string, number][] {
     for (const t of m.topics) counts.set(t, (counts.get(t) ?? 0) + 1);
   }
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function PreviewPanel({ preview }: { preview: CapturePreview }) {
+  return (
+    <div className="space-y-3 rounded-lg border border-slate-800 p-3">
+      <Row label="Title" value={preview.title} />
+      <Row label="Type" value={preview.memory_type} />
+
+      <div>
+        <p className="text-[10px] uppercase tracking-wider text-slate-600">
+          Confidence
+        </p>
+        <p
+          className={
+            preview.confidence === "uncertain"
+              ? "text-xs text-amber-300"
+              : "text-xs text-slate-300"
+          }
+        >
+          {preview.confidence}
+          {preview.uncertainty_markers.length > 0 && (
+            <span className="text-slate-500">
+              {" "}
+              — you said &ldquo;{preview.uncertainty_markers.join('", "')}
+              &rdquo;
+            </span>
+          )}
+        </p>
+      </div>
+
+      {preview.topics.length > 0 && (
+        <div>
+          <p className="mb-1 text-[10px] uppercase tracking-wider text-slate-600">
+            Topics
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {preview.topics.map((t) => (
+              <span
+                key={t}
+                className="rounded bg-indigo-950/60 px-1.5 py-0.5 text-[10px] text-indigo-300"
+              >
+                #{t}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="border-t border-slate-800 pt-2">
+        <p className="text-[10px] text-slate-600">
+          Provider: {preview.provider}
+          {!preview.ai_available && " (unavailable — used rules)"}
+        </p>
+        <p className="mt-1 text-[10px] leading-relaxed text-slate-600">
+          Title, type and topics are AI interpretation. Your original
+          words are stored unchanged.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-[10px] uppercase tracking-wider text-slate-600">
+        {label}
+      </p>
+      <p className="text-xs text-slate-300">{value}</p>
+    </div>
+  );
 }
 
 function MemoryCard({ memory }: { memory: Memory }) {

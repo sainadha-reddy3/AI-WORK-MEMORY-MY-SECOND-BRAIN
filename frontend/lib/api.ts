@@ -60,3 +60,38 @@ export async function createMemory(data: MemoryCreate): Promise<Memory> {
   }
   return res.json();
 }
+
+export type CapturePreview = {
+  provider: string;
+  ai_available: boolean;
+  title: string;
+  memory_type: string;
+  confidence: string;
+  topics: string[];
+  language: string;
+  uncertainty_markers: string[];
+};
+
+export type CaptureResult = {
+  memory: Memory;
+  preview: CapturePreview;
+};
+
+/**
+ * Create a memory from natural language.
+ *
+ * The AI proposes title, type and topics; the response includes what
+ * was inferred so it can be shown rather than applied invisibly.
+ */
+export async function captureMemory(text: string): Promise<CaptureResult> {
+  const res = await fetch(`${API_URL}/memories/capture`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`Failed to save memory (${res.status}): ${detail}`);
+  }
+  return res.json();
+}
