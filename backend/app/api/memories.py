@@ -12,9 +12,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.schemas import EvidenceCreate, MemoryCreate, MemoryRead
+from app.schemas import (
+    CaptureResult,
+    EvidenceCreate,
+    MemoryCapture,
+    MemoryCreate,
+    MemoryRead,
+)
 from app.services import (
     MemoryValidationError,
+    capture_memory,
     create_memory,
     get_memory,
     list_memories,
@@ -26,11 +33,10 @@ router = APIRouter(prefix="/memories", tags=["memories"])
 @router.post("", response_model=MemoryRead, status_code=status.HTTP_201_CREATED)
 def create(data: MemoryCreate, db: Session = Depends(get_db)):
     """
-    Create a memory.
+    Create a memory with explicit fields.
 
-    If no evidence is supplied, we record that the user typed this
-    directly — so every memory still has a traceable source rather
-    than being rejected outright.
+    The precise path — used for imports, tests, and any case needing
+    exact control. For natural language, use /memories/capture.
     """
     if not data.evidence:
         data.evidence = [
@@ -39,6 +45,29 @@ def create(data: MemoryCreate, db: Session = Depends(get_db)):
 
     try:
         return create_memory(db, data)
+    except MemoryValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+
+
+@router.post(
+    "/capture", response_model=CaptureResult, status_code=status.HTTP_201_CREATED
+)
+def capture(data: MemoryCapture, db: Session = Depends(get_db)):
+    """
+    Create a memory from natural language.
+
+    The user writes freely; the AI proposes title, type and topics.
+    The response includes what was inferred, so nothing is applied
+    invisibly.
+
+    Declared BEFORE /{memory_id} — otherwise FastAPI would try to
+    parse "capture" as a UUID.
+    """
+    try:
+        memory, preview = capture_memory(db, data)
+        return {"memory": memory, "preview": preview}
     except MemoryValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)

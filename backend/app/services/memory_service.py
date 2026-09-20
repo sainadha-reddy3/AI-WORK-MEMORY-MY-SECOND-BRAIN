@@ -18,6 +18,8 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import Evidence, Memory
 from app.schemas import MemoryCreate
 
+from app.ai import get_provider
+from app.schemas import EvidenceCreate, MemoryCapture
 
 class MemoryValidationError(ValueError):
     """Raised when a memory cannot be accepted as written."""
@@ -125,3 +127,60 @@ def list_memories(
 def count_memories(db: Session) -> int:
     """Total memories stored. Used by the UI's counters."""
     return len(list(db.execute(select(Memory.id)).scalars().all()))
+
+def capture_memory(db: Session, data: MemoryCapture) -> tuple[Memory, dict]:
+    """
+    Create a memory from natural language, with AI-proposed structure.
+
+    The AI proposes; it does not decide. Three invariants hold
+    regardless of what the model returns:
+
+      * raw_input keeps the user's exact words
+      * uncertainty is never downgraded to certainty
+      * the evidence row records that structuring was AI-assisted,
+        so inferred fields are distinguishable from stated ones
+    """
+    provider = get_provider()
+    structured = provider.structure_memory(data.text)
+
+    # Explicit user input always wins over AI inference.
+    topics = data.topics if data.topics is not None else structured.topics
+
+    memory_in = MemoryCreate(
+        occurred_on=data.occurred_on or date.today(),
+        title=structured.title,
+        # The user's words, not the model's rewrite.
+        content=data.text.strip(),
+        memory_type=structured.memory_type,
+        confidence=structured.confidence,
+        topics=topics,
+        project=data.project,
+        language=structured.language,
+        raw_input=data.text.strip(),
+        evidence=[
+            EvidenceCreate(
+                source_type="user_typed",
+                source_detail=(
+                    f"Structured by AI provider '{provider.name}'. "
+                    "Title, type and topics are AI interpretation; "
+                    "the content is the user's own words."
+                ),
+                excerpt=data.text.strip()[:500],
+            )
+        ],
+    )
+
+    memory = create_memory(db, memory_in)
+
+    preview = {
+        "provider": provider.name,
+        "ai_available": provider.is_available(),
+        "title": structured.title,
+        "memory_type": structured.memory_type,
+        "confidence": structured.confidence,
+        "topics": topics,
+        "language": structured.language,
+        "uncertainty_markers": structured.uncertainty_markers,
+    }
+
+    return memory, preview

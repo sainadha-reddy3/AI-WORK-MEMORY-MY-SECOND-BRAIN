@@ -97,3 +97,43 @@ class MemoryRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+class MemoryCapture(BaseModel):
+    """
+    Natural-language memory capture.
+
+    The user writes freely; the AI proposes structure. Only `text`
+    is required — everything else is optional override.
+    """
+
+    text: str = Field(min_length=1)
+
+    # Optional: defaults to today if not supplied.
+    occurred_on: date | None = None
+
+    # Optional overrides. If the user explicitly states a value,
+    # it wins over whatever the AI proposed.
+    project: str | None = None
+    topics: list[str] | None = None
+
+
+class CapturePreview(BaseModel):
+    """
+    What the AI proposed, returned alongside the saved memory so the
+    user can see what was inferred rather than having it applied
+    invisibly.
+    """
+
+    provider: str
+    ai_available: bool
+    title: str
+    memory_type: str
+    confidence: str
+    topics: list[str]
+    language: str
+    uncertainty_markers: list[str]
+
+
+class CaptureResult(BaseModel):
+    memory: MemoryRead
+    preview: CapturePreview
