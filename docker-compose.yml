@@ -33,6 +33,12 @@ services:
       - ENVIRONMENT=${ENVIRONMENT}
       # localhost = the Codespace itself, where postgres publishes 5432.
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+      # AI provider config. Swapping providers is a config change,
+      # never a code change.
+      - AI_PROVIDER=${AI_PROVIDER}
+      - OLLAMA_URL=${OLLAMA_URL}
+      - OLLAMA_MODEL=${OLLAMA_MODEL}
+      - OLLAMA_EMBED_MODEL=${OLLAMA_EMBED_MODEL}
     depends_on:
       postgres:
         condition: service_healthy

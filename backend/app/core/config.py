@@ -15,6 +15,16 @@ class Settings(BaseSettings):
 
     environment: str = "development"
 
+    # --- AI provider ------------------------------------------
+    # Which provider to use: "mock" or "ollama".
+    # Kept in config so switching providers never means a code change.
+    ai_provider: str = "mock"
+
+    # Used only when ai_provider is "ollama".
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2:3b"
+    ollama_embed_model: str = "nomic-embed-text"
+
     class Config:
         case_sensitive = False
 
