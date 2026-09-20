@@ -1,17 +1,40 @@
 services:
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: awm-postgres
+    environment:
+      # ${VAR} pulls the value from .env at startup.
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - awm_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   backend:
     build: ./backend
     container_name: awm-backend
     ports:
       - "8000:8000"
     volumes:
-      # Live-reload: your local code is mapped into the container,
-      # so edits appear instantly without rebuilding the image.
       - ./backend/app:/app/app
-      # Uploaded files live on the host, NOT inside the container,
-      # so they survive the container being destroyed.
       - ./storage:/app/storage
     environment:
-      - ENVIRONMENT=development
+      - ENVIRONMENT=${ENVIRONMENT}
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
+
+volumes:
+  awm_postgres_data:
