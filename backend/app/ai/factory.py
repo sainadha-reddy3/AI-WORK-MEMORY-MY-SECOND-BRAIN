@@ -9,6 +9,7 @@ from functools import lru_cache
 
 from app.ai.base import AIProvider
 from app.ai.mock_provider import MockProvider
+from app.ai.ollama_provider import OllamaProvider
 from app.core.config import settings
 
 
@@ -17,14 +18,13 @@ def get_provider() -> AIProvider:
     """
     Return the configured provider.
 
-    Controlled by AI_PROVIDER in the environment. Unknown values fall
-    back to the mock rather than crashing — a misconfigured provider
-    should degrade visibly, not take the app down.
+    Unknown values fall back to the mock rather than crashing — a
+    misconfigured provider should degrade visibly, not take the
+    application down.
     """
     choice = (settings.ai_provider or "mock").lower()
 
-    if choice == "mock":
-        return MockProvider()
+    if choice == "ollama":
+        return OllamaProvider()
 
-    # Ollama is added in Task 4.2.
     return MockProvider()
