@@ -25,7 +25,9 @@ services:
     # Workaround for broken container-to-container forwarding here.
     network_mode: host
     volumes:
-      - ./backend/app:/app/app
+      # Map the WHOLE backend folder, not just app/, so files the
+      # container creates (alembic migrations) land in the repo.
+      - ./backend:/app
       - ./storage:/app/storage
     environment:
       - ENVIRONMENT=${ENVIRONMENT}
