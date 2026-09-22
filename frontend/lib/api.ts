@@ -95,3 +95,31 @@ export async function captureMemory(text: string): Promise<CaptureResult> {
   }
   return res.json();
 }
+export type AskResponse = {
+  question: string;
+  has_recorded_memory: boolean;
+  answer: string;
+  general_knowledge: string | null;
+  sources: Memory[];
+  provider: string;
+  provider_available: boolean;
+};
+
+/**
+ * Ask a question about recorded history.
+ *
+ * Returns has_recorded_memory=false when nothing relevant exists —
+ * the UI must show that clearly rather than hiding it.
+ */
+export async function askQuestion(question: string): Promise<AskResponse> {
+  const res = await fetch(`${API_URL}/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`Failed to ask (${res.status}): ${detail}`);
+  }
+  return res.json();
+}
