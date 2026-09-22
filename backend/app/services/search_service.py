@@ -22,8 +22,10 @@ from app.models import Memory, MemoryEmbedding
 from app.services.embedding_service import _fit_dimensions
 
 # Below this similarity, a semantic match is treated as noise.
+# Tuned against real data: unrelated content scores ~0.00, weak but
+# genuine matches land around 0.15-0.26, strong matches 0.35+.
 # Deliberately conservative — a wrong memory is worse than none.
-MIN_SEMANTIC_SIMILARITY = 0.35
+MIN_SEMANTIC_SIMILARITY = 0.25
 
 # Reciprocal Rank Fusion constant. 60 is the value from the original
 # paper and works well in practice.

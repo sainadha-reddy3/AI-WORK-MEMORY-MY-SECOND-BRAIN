@@ -8,6 +8,7 @@ Everything else calls get_provider().
 from functools import lru_cache
 
 from app.ai.base import AIProvider
+from app.ai.local_provider import LocalProvider
 from app.ai.mock_provider import MockProvider
 from app.ai.ollama_provider import OllamaProvider
 from app.core.config import settings
@@ -22,7 +23,10 @@ def get_provider() -> AIProvider:
     misconfigured provider should degrade visibly, not take the
     application down.
     """
-    choice = (settings.ai_provider or "mock").lower()
+    choice = (settings.ai_provider or "local").lower()
+
+    if choice == "local":
+        return LocalProvider()
 
     if choice == "ollama":
         return OllamaProvider()

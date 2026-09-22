@@ -21,9 +21,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 
-# nomic-embed-text produces 768-dimensional vectors.
-# This must match the model exactly.
-EMBEDDING_DIM = 768
+# all-MiniLM-L6-v2 produces 384-dimensional vectors.
+# Changing this requires a migration and re-embedding — which is
+# exactly why embeddings live in their own table.
+EMBEDDING_DIM = 384
 
 
 class MemoryEmbedding(Base):
