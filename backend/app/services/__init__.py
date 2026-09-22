@@ -11,6 +11,12 @@ from app.services.memory_service import (
     get_memory,
     list_memories,
 )
+from app.services.search_service import (
+    SearchHit,
+    hybrid_search,
+    keyword_search,
+    semantic_search,
+)
 
 __all__ = [
     "create_memory",
@@ -22,4 +28,8 @@ __all__ = [
     "embed_memory",
     "backfill_embeddings",
     "embedding_status",
+    "keyword_search",
+    "semantic_search",
+    "hybrid_search",
+    "SearchHit",
 ]
