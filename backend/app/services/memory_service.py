@@ -15,11 +15,10 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Evidence, Memory
-from app.schemas import MemoryCreate
-
 from app.ai import get_provider
-from app.schemas import EvidenceCreate, MemoryCapture
+from app.models import Evidence, Memory
+from app.schemas import EvidenceCreate, MemoryCapture, MemoryCreate
+
 
 class MemoryValidationError(ValueError):
     """Raised when a memory cannot be accepted as written."""
@@ -128,6 +127,7 @@ def count_memories(db: Session) -> int:
     """Total memories stored. Used by the UI's counters."""
     return len(list(db.execute(select(Memory.id)).scalars().all()))
 
+
 def capture_memory(db: Session, data: MemoryCapture) -> tuple[Memory, dict]:
     """
     Create a memory from natural language, with AI-proposed structure.
@@ -171,6 +171,14 @@ def capture_memory(db: Session, data: MemoryCapture) -> tuple[Memory, dict]:
     )
 
     memory = create_memory(db, memory_in)
+
+    # Embed for semantic search. Deliberately best-effort: if the
+    # model is unreachable the memory is still saved, and a backfill
+    # will pick it up later. Imported locally to avoid a circular
+    # import with embedding_service.
+    from app.services.embedding_service import embed_memory
+
+    embed_memory(db, memory)
 
     preview = {
         "provider": provider.name,

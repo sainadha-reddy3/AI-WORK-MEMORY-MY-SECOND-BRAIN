@@ -1,3 +1,8 @@
+from app.services.embedding_service import (
+    backfill_embeddings,
+    embed_memory,
+    embedding_status,
+)
 from app.services.memory_service import (
     MemoryValidationError,
     capture_memory,
@@ -14,4 +19,7 @@ __all__ = [
     "list_memories",
     "count_memories",
     "MemoryValidationError",
+    "embed_memory",
+    "backfill_embeddings",
+    "embedding_status",
 ]

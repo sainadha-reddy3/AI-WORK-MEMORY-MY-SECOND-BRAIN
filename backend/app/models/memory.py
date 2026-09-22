@@ -80,6 +80,12 @@ class Memory(Base):
         back_populates="memory", cascade="all, delete-orphan"
     )
 
+    # Vectors for semantic search. Derived data — deleting them loses
+    # nothing that cannot be regenerated from the text.
+    embeddings: Mapped[list["MemoryEmbedding"]] = relationship(  # noqa: F821
+        back_populates="memory", cascade="all, delete-orphan"
+    )
+
     def __repr__(self) -> str:
         return f"<Memory {self.occurred_on} {self.title!r}>"
 
