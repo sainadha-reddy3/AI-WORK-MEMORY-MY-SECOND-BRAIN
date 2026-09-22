@@ -66,11 +66,9 @@ export default function Home() {
 
       {/* ---------- TOP BAR ---------- */}
       <header className="flex h-16 shrink-0 items-center gap-4 border-b border-slate-800 px-5">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 text-lg">
-            🧠
-          </div>
-          <div>
+        <div className="flex shrink-0 items-center gap-3">
+          <MemoryLogo active={asking || saving} />
+          <div className="hidden sm:block">
             <h1 className="text-sm font-semibold text-white">My Work Memory</h1>
             <p className="text-[11px] text-slate-500">Remember. Learn. Grow.</p>
           </div>
@@ -94,8 +92,8 @@ export default function Home() {
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="rounded-md border border-slate-800 px-2 py-1 text-xs text-slate-400">
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="hidden rounded-md border border-slate-800 px-2 py-1 text-xs text-slate-400 sm:block">
             EN
           </span>
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500 text-xs font-medium text-white">
@@ -107,8 +105,8 @@ export default function Home() {
       {/* ---------- THREE PANELS ---------- */}
       <div className="flex flex-1 overflow-hidden">
 
-        {/* LEFT */}
-        <aside className="w-64 shrink-0 overflow-y-auto border-r border-slate-800 p-4">
+        {/* LEFT — hidden on narrow screens so the conversation keeps room */}
+        <aside className="hidden w-56 shrink-0 overflow-y-auto border-r border-slate-800 p-4 md:block lg:w-64">
           <button
             onClick={() => setAnswer(null)}
             className="mb-4 w-full rounded-lg bg-indigo-600 px-3 py-2 text-left text-sm font-medium text-white"
@@ -143,7 +141,7 @@ export default function Home() {
         </aside>
 
         {/* CENTER */}
-        <main className="flex flex-1 flex-col overflow-hidden">
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-800 px-6 py-4">
             <h2 className="text-lg font-semibold text-white">
               {answer ? "Answer" : "Chat"}
@@ -163,7 +161,9 @@ export default function Home() {
             ) : memories.length === 0 ? (
               <div className="flex h-full items-center justify-center text-center">
                 <div>
-                  <div className="mb-3 text-4xl">🧠</div>
+                  <div className="mb-3 flex justify-center">
+                    <MemoryLogo size={56} active />
+                  </div>
                   <p className="text-sm text-slate-400">Your memory is empty.</p>
                   <p className="mt-1 text-xs text-slate-600">
                     Tell me what you worked on today and I&apos;ll remember it.
@@ -209,8 +209,8 @@ export default function Home() {
           </div>
         </main>
 
-        {/* RIGHT */}
-        <aside className="w-80 shrink-0 overflow-y-auto border-l border-slate-800 p-4">
+        {/* RIGHT — needs more room, so appears only on wider screens */}
+        <aside className="hidden w-64 shrink-0 overflow-y-auto border-l border-slate-800 p-4 md:block xl:w-80">
           <h3 className="mb-3 text-sm font-semibold text-white">
             {answer ? "Sources" : "What the AI understood"}
           </h3>
@@ -261,6 +261,146 @@ export default function Home() {
 
       </div>
     </div>
+  );
+}
+
+/* ---------- logo ---------- */
+
+/**
+ * Animated neural-network mark.
+ *
+ * Pure SVG with native <animate> elements — no CSS, no images, no
+ * external files. Nodes pulse and connections shimmer, suggesting
+ * memory forming. `active` speeds it up while work is happening.
+ */
+function MemoryLogo({
+  size = 36,
+  active = false,
+}: {
+  size?: number;
+  active?: boolean;
+}) {
+  const speed = active ? "0.9s" : "2.8s";
+
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 48 48"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        <linearGradient id="awmBg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#4f46e5" />
+          <stop offset="100%" stopColor="#7c3aed" />
+        </linearGradient>
+        <radialGradient id="awmGlow">
+          <stop offset="0%" stopColor="#c7d2fe" stopOpacity="0.9" />
+          <stop offset="100%" stopColor="#c7d2fe" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+
+      <rect width="48" height="48" rx="12" fill="url(#awmBg)" />
+
+      {/* soft breathing glow behind the network */}
+      <circle cx="24" cy="24" r="16" fill="url(#awmGlow)">
+        <animate
+          attributeName="opacity"
+          values="0.25;0.6;0.25"
+          dur={speed}
+          repeatCount="indefinite"
+        />
+      </circle>
+
+      {/* connections */}
+      <g stroke="#e0e7ff" strokeWidth="1.2" strokeLinecap="round">
+        <line x1="24" y1="24" x2="14" y2="14">
+          <animate
+            attributeName="opacity"
+            values="0.2;0.85;0.2"
+            dur={speed}
+            repeatCount="indefinite"
+          />
+        </line>
+        <line x1="24" y1="24" x2="34" y2="15">
+          <animate
+            attributeName="opacity"
+            values="0.85;0.2;0.85"
+            dur={speed}
+            repeatCount="indefinite"
+          />
+        </line>
+        <line x1="24" y1="24" x2="13" y2="31">
+          <animate
+            attributeName="opacity"
+            values="0.4;0.9;0.4"
+            dur={speed}
+            begin="0.3s"
+            repeatCount="indefinite"
+          />
+        </line>
+        <line x1="24" y1="24" x2="33" y2="33">
+          <animate
+            attributeName="opacity"
+            values="0.9;0.3;0.9"
+            dur={speed}
+            begin="0.6s"
+            repeatCount="indefinite"
+          />
+        </line>
+        <line x1="14" y1="14" x2="34" y2="15" opacity="0.3" />
+        <line x1="13" y1="31" x2="33" y2="33" opacity="0.3" />
+      </g>
+
+      {/* outer nodes */}
+      <g fill="#e0e7ff">
+        <circle cx="14" cy="14" r="3">
+          <animate
+            attributeName="r"
+            values="2.4;3.4;2.4"
+            dur={speed}
+            repeatCount="indefinite"
+          />
+        </circle>
+        <circle cx="34" cy="15" r="2.6">
+          <animate
+            attributeName="r"
+            values="3.2;2.2;3.2"
+            dur={speed}
+            repeatCount="indefinite"
+          />
+        </circle>
+        <circle cx="13" cy="31" r="2.4">
+          <animate
+            attributeName="r"
+            values="2.2;3.2;2.2"
+            dur={speed}
+            begin="0.3s"
+            repeatCount="indefinite"
+          />
+        </circle>
+        <circle cx="33" cy="33" r="3">
+          <animate
+            attributeName="r"
+            values="3.4;2.4;3.4"
+            dur={speed}
+            begin="0.6s"
+            repeatCount="indefinite"
+          />
+        </circle>
+      </g>
+
+      {/* core */}
+      <circle cx="24" cy="24" r="5" fill="#ffffff">
+        <animate
+          attributeName="r"
+          values="4.4;5.4;4.4"
+          dur={speed}
+          repeatCount="indefinite"
+        />
+      </circle>
+    </svg>
   );
 }
 
