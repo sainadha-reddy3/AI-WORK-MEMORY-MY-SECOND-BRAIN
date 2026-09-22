@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.api.ask import router as ask_router
 from app.api.memories import router as memories_router
 from app.db.session import get_db
 
@@ -28,6 +29,7 @@ app.add_middleware(
 )
 
 app.include_router(memories_router)
+app.include_router(ask_router)
 
 
 @app.get("/")
@@ -35,7 +37,7 @@ def read_root():
     return {
         "app": "AI Work Memory — My Second Brain",
         "status": "running",
-        "phase": 3,
+        "phase": 5,
     }
 
 

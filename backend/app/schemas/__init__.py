@@ -1,3 +1,4 @@
+from app.schemas.ask import AskRequest, AskResponse
 from app.schemas.memory import (
     CapturePreview,
     CaptureResult,
@@ -16,4 +17,6 @@ __all__ = [
     "MemoryCapture",
     "CapturePreview",
     "CaptureResult",
+    "AskRequest",
+    "AskResponse",
 ]

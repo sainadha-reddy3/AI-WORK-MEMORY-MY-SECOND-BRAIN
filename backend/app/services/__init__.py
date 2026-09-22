@@ -1,3 +1,4 @@
+from app.services.ask_service import ask
 from app.services.embedding_service import (
     backfill_embeddings,
     embed_memory,
@@ -13,6 +14,7 @@ from app.services.memory_service import (
 )
 from app.services.search_service import (
     SearchHit,
+    extract_terms,
     hybrid_search,
     keyword_search,
     semantic_search,
@@ -31,5 +33,7 @@ __all__ = [
     "keyword_search",
     "semantic_search",
     "hybrid_search",
+    "extract_terms",
     "SearchHit",
+    "ask",
 ]

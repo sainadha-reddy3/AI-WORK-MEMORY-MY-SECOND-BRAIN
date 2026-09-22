@@ -11,6 +11,7 @@ questions it has no real memory of — which is exactly the failure
 this project exists to prevent.
 """
 
+import re
 from dataclasses import dataclass
 
 from sqlalchemy import or_, select
@@ -28,6 +29,33 @@ MIN_SEMANTIC_SIMILARITY = 0.35
 # paper and works well in practice.
 RRF_K = 60
 
+# Common words that carry no search signal. Stripped from questions
+# so "What did I do with ArgoCD?" searches for "argocd" rather than
+# the whole sentence.
+STOPWORDS = {
+    "what", "when", "where", "who", "why", "how", "which", "did", "do",
+    "does", "done", "was", "were", "is", "are", "am", "the", "a", "an",
+    "i", "my", "me", "we", "our", "you", "your", "it", "this", "that",
+    "with", "for", "about", "on", "in", "at", "to", "of", "and", "or",
+    "have", "has", "had", "ever", "all", "any", "some", "show", "tell",
+    "give", "find", "get", "there", "then", "so", "but", "if", "can",
+    "could", "would", "should", "will", "work", "worked", "working",
+}
+
+
+def extract_terms(query: str) -> list[str]:
+    """
+    Pull the meaningful words out of a natural-language question.
+
+    Users ask questions ("What did I do with ArgoCD?"), but keyword
+    search needs terms ("argocd"). Semantic search handles sentences
+    natively; this keeps the keyword half useful too.
+    """
+    words = re.findall(r"[a-zA-Z0-9][a-zA-Z0-9.\-_]*", query.lower())
+    terms = [w for w in words if w not in STOPWORDS and len(w) > 1]
+    # If stripping removed everything, fall back to the original.
+    return terms or [query.strip().lower()]
+
 
 @dataclass
 class SearchHit:
@@ -37,22 +65,31 @@ class SearchHit:
 
 
 def keyword_search(db: Session, query: str, limit: int = 20) -> list[Memory]:
-    """Literal text matching across title, content and topics."""
-    q = query.strip()
-    if not q:
+    """
+    Literal text matching across title, content and topics.
+
+    Matches ANY extracted term rather than the full query string, so
+    a natural question still finds the memory it refers to.
+    """
+    terms = extract_terms(query)
+    if not terms:
         return []
 
-    pattern = f"%{q}%"
+    conditions = []
+    for term in terms:
+        pattern = f"%{term}%"
+        conditions.extend(
+            [
+                Memory.title.ilike(pattern),
+                Memory.content.ilike(pattern),
+                Memory.topics.any(term),
+            ]
+        )
+
     stmt = (
         select(Memory)
         .options(selectinload(Memory.evidence))
-        .where(
-            or_(
-                Memory.title.ilike(pattern),
-                Memory.content.ilike(pattern),
-                Memory.topics.any(q.lower()),
-            )
-        )
+        .where(or_(*conditions))
         .order_by(Memory.occurred_on.desc())
         .limit(limit)
     )
