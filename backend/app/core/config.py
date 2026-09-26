@@ -16,14 +16,20 @@ class Settings(BaseSettings):
     environment: str = "development"
 
     # --- AI provider ------------------------------------------
-    # Which provider to use: "mock" or "ollama".
+    # Which provider to use: "local", "ollama" or "mock".
     # Kept in config so switching providers never means a code change.
-    ai_provider: str = "mock"
+    ai_provider: str = "local"
 
     # Used only when ai_provider is "ollama".
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2:3b"
     ollama_embed_model: str = "nomic-embed-text"
+
+    # --- File storage -----------------------------------------
+    # Where original files (screenshots, documents, notebook photos)
+    # are kept. Mounted from ./storage on the host, which is
+    # gitignored — personal files never enter Git.
+    storage_dir: str = "/app/storage"
 
     class Config:
         case_sensitive = False

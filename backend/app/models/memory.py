@@ -86,6 +86,12 @@ class Memory(Base):
         back_populates="memory", cascade="all, delete-orphan"
     )
 
+    # Original files behind this memory. No cascade: deleting a memory
+    # must never delete the original file.
+    attachments: Mapped[list["Attachment"]] = relationship(  # noqa: F821
+        back_populates="memory"
+    )
+
     def __repr__(self) -> str:
         return f"<Memory {self.occurred_on} {self.title!r}>"
 
@@ -113,6 +119,13 @@ class Evidence(Base):
 
     # The specific fragment that supports this memory.
     excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # When the evidence is a file, a real link to it.
+    attachment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("attachments.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
