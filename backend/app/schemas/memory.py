@@ -3,9 +3,6 @@ API schemas for memories.
 
 These describe what the API accepts and returns — deliberately
 separate from the database models in app/models/memory.py.
-
-The database model can change without breaking the API contract,
-and the API can change without requiring a migration.
 """
 
 import uuid
@@ -14,8 +11,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# Allowed values, declared once and reused.
-# Literal means anything else is rejected automatically.
 MemoryType = Literal[
     "note", "learning", "mistake", "solution", "incident", "code", "meeting"
 ]
@@ -45,37 +40,43 @@ class EvidenceCreate(BaseModel):
 class EvidenceRead(EvidenceCreate):
     id: uuid.UUID
     created_at: datetime
+    # Set when the evidence is an uploaded file.
+    attachment_id: uuid.UUID | None = None
 
     class Config:
-        from_attributes = True  # allows reading directly from an ORM object
+        from_attributes = True
+
+
+class AttachmentBrief(BaseModel):
+    """
+    Compact view of a file attached to a memory.
+
+    Defined here rather than in schemas/attachment.py because that
+    module imports MemoryRead — defining it there would be circular.
+    """
+
+    id: uuid.UUID
+    kind: str
+    original_filename: str
+    content_type: str
+    size_bytes: int
+
+    class Config:
+        from_attributes = True
 
 
 class MemoryCreate(BaseModel):
-    """
-    What the client sends to create a memory.
-
-    No id and no created_at — the server generates those.
-    """
+    """What the client sends to create a memory with explicit fields."""
 
     occurred_on: date
     title: str = Field(min_length=1, max_length=300)
     content: str = Field(min_length=1)
-
     memory_type: MemoryType = "note"
-
-    # Defaults to "confirmed", but the caller can mark a memory
-    # uncertain when the user said "I think..." or "I'm not sure".
     confidence: Confidence = "confirmed"
-
     topics: list[str] = Field(default_factory=list)
     project: str | None = None
     language: Language = "en"
-
-    # The user's original words. Preserved unchanged so there is
-    # always a way back to what was actually said.
     raw_input: str | None = None
-
-    # At least one source should back every memory.
     evidence: list[EvidenceCreate] = Field(default_factory=list)
 
 
@@ -94,9 +95,11 @@ class MemoryRead(BaseModel):
     language: str
     raw_input: str | None
     evidence: list[EvidenceRead]
+    attachments: list[AttachmentBrief] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
+
 
 class MemoryCapture(BaseModel):
     """
@@ -107,22 +110,13 @@ class MemoryCapture(BaseModel):
     """
 
     text: str = Field(min_length=1)
-
-    # Optional: defaults to today if not supplied.
     occurred_on: date | None = None
-
-    # Optional overrides. If the user explicitly states a value,
-    # it wins over whatever the AI proposed.
     project: str | None = None
     topics: list[str] | None = None
 
 
 class CapturePreview(BaseModel):
-    """
-    What the AI proposed, returned alongside the saved memory so the
-    user can see what was inferred rather than having it applied
-    invisibly.
-    """
+    """What the AI proposed, shown so nothing is applied invisibly."""
 
     provider: str
     ai_available: bool
