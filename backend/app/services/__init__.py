@@ -19,6 +19,7 @@ from app.services.search_service import (
     keyword_search,
     semantic_search,
 )
+from app.services.topic_service import get_topic_history, list_all_topics
 
 __all__ = [
     "create_memory",
@@ -36,4 +37,6 @@ __all__ = [
     "extract_terms",
     "SearchHit",
     "ask",
+    "get_topic_history",
+    "list_all_topics",
 ]

@@ -103,7 +103,7 @@ def list_memories(
 
     if topic:
         # Postgres array containment: does topics include this tag?
-        stmt = stmt.where(Memory.topics.contains([topic.strip().lower()]))
+        stmt = stmt.where(Memory.topics.any(topic.strip().lower()))
 
     if memory_type:
         stmt = stmt.where(Memory.memory_type == memory_type)
