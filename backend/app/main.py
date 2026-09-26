@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.ask import router as ask_router
+from app.api.attachments import router as attachments_router
 from app.api.memories import router as memories_router
 from app.api.topics import router as topics_router
 from app.db.session import get_db
@@ -32,6 +33,7 @@ app.add_middleware(
 app.include_router(memories_router)
 app.include_router(ask_router)
 app.include_router(topics_router)
+app.include_router(attachments_router)
 
 
 @app.get("/")
@@ -39,7 +41,7 @@ def read_root():
     return {
         "app": "AI Work Memory — My Second Brain",
         "status": "running",
-        "phase": 6,
+        "phase": 7,
     }
 
 

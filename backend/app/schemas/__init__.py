@@ -1,5 +1,5 @@
 from app.schemas.ask import AskRequest, AskResponse
-from app.schemas.topic import RelatedTopic, TopicHistory, TopicSummary
+from app.schemas.attachment import AttachmentRead, UploadResult
 from app.schemas.memory import (
     CapturePreview,
     CaptureResult,
@@ -9,6 +9,7 @@ from app.schemas.memory import (
     MemoryCreate,
     MemoryRead,
 )
+from app.schemas.topic import RelatedTopic, TopicHistory, TopicSummary
 
 __all__ = [
     "MemoryCreate",
@@ -23,4 +24,6 @@ __all__ = [
     "TopicSummary",
     "TopicHistory",
     "RelatedTopic",
+    "AttachmentRead",
+    "UploadResult",
 ]
