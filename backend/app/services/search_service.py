@@ -18,7 +18,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.ai import get_provider
-from app.models import Memory, MemoryEmbedding
+from app.models import Attachment, Memory, MemoryEmbedding
 from app.services.embedding_service import _fit_dimensions
 
 # Below this similarity, a semantic match is treated as noise.
@@ -85,6 +85,8 @@ def keyword_search(db: Session, query: str, limit: int = 20) -> list[Memory]:
                 Memory.title.ilike(pattern),
                 Memory.content.ilike(pattern),
                 Memory.topics.any(term),
+                # Text read out of attached files.
+                Memory.attachments.any(Attachment.extracted_text.ilike(pattern)),
             ]
         )
 

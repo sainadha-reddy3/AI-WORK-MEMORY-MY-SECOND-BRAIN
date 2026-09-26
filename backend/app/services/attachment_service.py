@@ -6,7 +6,10 @@ Rules enforced here:
   * the original file is always kept, byte for byte
   * a file becomes EVIDENCE for its memory, not decoration
   * with no description, nothing about the file's content is invented
-  * obvious credential files are refused before they reach storage
+  * credential files are refused — by name AND by content — before
+    anything reaches storage
+  * text read out of a file is stored as derived data, and the memory
+    is re-embedded so that text becomes searchable
 """
 
 import uuid
@@ -20,6 +23,7 @@ from app.core.storage import build_key, get_storage, sha256_of
 from app.models import Attachment, Evidence, Memory
 from app.schemas import EvidenceCreate, MemoryCapture, MemoryCreate
 from app.services.embedding_service import embed_memory
+from app.services.extraction import extract_text, looks_like_secret
 from app.services.memory_service import capture_memory, create_memory
 
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB
@@ -36,8 +40,7 @@ CODE_SUFFIXES = {
 }
 CODE_FILENAMES = {"dockerfile", "makefile", "jenkinsfile"}
 
-# Files that almost certainly contain credentials. Refused outright —
-# this system must never become a place where secrets are stored.
+# Files that almost certainly contain credentials, judged by name.
 SECRET_FILENAMES = {".env", "id_rsa", "id_ed25519", "credentials.json", ".npmrc", ".pypirc"}
 SECRET_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".keystore"}
 
@@ -57,6 +60,8 @@ KIND_LABEL = {
     "document": "Document",
     "code": "Code file",
 }
+
+EXCERPT_CHARS = 300
 
 
 class AttachmentError(ValueError):
@@ -86,20 +91,18 @@ def classify(filename: str, content_type: str, requested: str | None) -> str:
     if suffix in DOCUMENT_SUFFIXES or content_type in {"application/pdf", "text/plain", "text/markdown"}:
         return "document"
 
-    raise AttachmentError(
-        f"Unsupported file type ({content_type or suffix or 'unknown'})."
-    )
+    raise AttachmentError(f"Unsupported file type ({content_type or suffix or 'unknown'}).")
 
 
 def _store_file(
-    db: Session, data: bytes, filename: str, content_type: str, kind: str
+    db: Session,
+    data: bytes,
+    filename: str,
+    content_type: str,
+    kind: str,
+    extracted: str | None,
 ) -> Attachment:
     """Save the bytes (once per unique content) and create the record."""
-    if not data:
-        raise AttachmentError("The file is empty.")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise AttachmentError("The file is larger than 15 MB.")
-
     storage = get_storage()
     digest = sha256_of(data)
 
@@ -122,6 +125,7 @@ def _store_file(
         sha256=digest,
         storage_backend=storage.name,
         storage_key=key,
+        extracted_text=extracted,
     )
     db.add(attachment)
     db.flush()
@@ -143,11 +147,26 @@ def upload_attachment(
 
     * memory_id given   → attach to that existing memory
     * note given        → create a memory from the note (AI-structured)
-    * neither           → create a minimal memory that describes only
-                          the upload itself, never the file's content
+    * neither           → create a minimal memory describing only the
+                          upload itself, never the file's content
     """
+    if not data:
+        raise AttachmentError("The file is empty.")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise AttachmentError("The file is larger than 15 MB.")
+
     kind = classify(filename, content_type, kind)
     source_type = EVIDENCE_SOURCE[kind]
+
+    # Read the text BEFORE storing, so a file containing a credential
+    # is refused without ever touching storage.
+    extracted = extract_text(data, filename, content_type or "", kind)
+    if extracted and looks_like_secret(extracted):
+        raise AttachmentError(
+            "This file appears to contain a credential (for example a "
+            "private key, access token or service-account key). It was "
+            "not stored."
+        )
 
     existing_memory = None
     if memory_id is not None:
@@ -155,8 +174,13 @@ def upload_attachment(
         if existing_memory is None:
             raise AttachmentError("Memory not found.")
 
-    attachment = _store_file(db, data, filename, content_type, kind)
+    attachment = _store_file(db, data, filename, content_type, kind, extracted)
     note = (note or "").strip()
+
+    file_detail = f"Original file: {filename}"
+    if extracted:
+        file_detail += " — text extracted automatically from the file"
+    file_excerpt = extracted[:EXCERPT_CHARS] if extracted else None
 
     if existing_memory is not None:
         memory = existing_memory
@@ -164,11 +188,20 @@ def upload_attachment(
             Evidence(
                 memory_id=memory.id,
                 source_type=source_type,
-                source_detail=f"Original file: {filename}",
-                excerpt=note or None,
+                source_detail=file_detail,
+                excerpt=file_excerpt,
                 attachment_id=attachment.id,
             )
         )
+        if note:
+            db.add(
+                Evidence(
+                    memory_id=memory.id,
+                    source_type="user_typed",
+                    source_detail="Note added together with a file",
+                    excerpt=note,
+                )
+            )
 
     elif note:
         # The note becomes a normal AI-structured memory (with its own
@@ -178,8 +211,8 @@ def upload_attachment(
             Evidence(
                 memory_id=memory.id,
                 source_type=source_type,
-                source_detail=f"Original file: {filename}",
-                excerpt=None,
+                source_detail=file_detail,
+                excerpt=file_excerpt,
                 attachment_id=attachment.id,
             )
         )
@@ -197,28 +230,70 @@ def upload_attachment(
                 evidence=[
                     EvidenceCreate(
                         source_type=source_type,
-                        source_detail=f"Original file: {filename}",
+                        source_detail=file_detail,
+                        excerpt=file_excerpt,
                     )
                 ],
             ),
         )
         memory.evidence[0].attachment_id = attachment.id
-        embed_memory(db, memory)
 
     attachment.memory_id = memory.id
     db.commit()
+
+    # Re-embed so the file's text becomes part of what semantic search sees.
+    db.refresh(memory)
+    embed_memory(db, memory)
+
     db.refresh(attachment)
     db.refresh(memory)
     return attachment, memory
+
+
+def backfill_extraction(db: Session) -> dict:
+    """
+    Extract text from attachments uploaded before extraction existed,
+    then re-embed the memories they belong to. Safe to run repeatedly.
+    """
+    pending = db.execute(
+        select(Attachment).where(Attachment.extracted_text.is_(None))
+    ).scalars().all()
+
+    extracted_count = 0
+    skipped = 0
+    touched: set = set()
+
+    for attachment in pending:
+        try:
+            data = read_attachment(attachment)
+        except FileNotFoundError:
+            skipped += 1
+            continue
+
+        text = extract_text(data, attachment.original_filename, attachment.content_type, attachment.kind)
+        if text:
+            attachment.extracted_text = text
+            extracted_count += 1
+            if attachment.memory_id:
+                touched.add(attachment.memory_id)
+        else:
+            skipped += 1
+
+    db.commit()
+
+    for mid in touched:
+        memory = db.get(Memory, mid)
+        if memory is not None:
+            embed_memory(db, memory)
+
+    return {"extracted": extracted_count, "skipped": skipped, "re_embedded": len(touched)}
 
 
 def get_attachment(db: Session, attachment_id: uuid.UUID) -> Attachment | None:
     return db.get(Attachment, attachment_id)
 
 
-def list_attachments(
-    db: Session, *, kind: str | None = None, limit: int = 50
-) -> list[Attachment]:
+def list_attachments(db: Session, *, kind: str | None = None, limit: int = 50) -> list[Attachment]:
     stmt = select(Attachment).order_by(Attachment.created_at.desc()).limit(limit)
     if kind:
         stmt = stmt.where(Attachment.kind == kind)

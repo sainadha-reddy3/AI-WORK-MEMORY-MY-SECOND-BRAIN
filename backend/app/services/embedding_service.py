@@ -7,27 +7,37 @@ by a later backfill. Memories are the asset; vectors are derived and
 can always be regenerated.
 """
 
-import uuid
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai import get_provider
 from app.models import EMBEDDING_DIM, Memory, MemoryEmbedding
 
+# How much text from each attached file goes into the embedding. The
+# model only reads roughly the first 250 words of its input anyway;
+# keyword search still covers the full extracted text.
+ATTACHMENT_TEXT_CHARS = 1500
+
 
 def _build_source_text(memory: Memory) -> str:
     """
     The text we actually embed.
 
-    Title, topics and content together — topics included because a
-    memory tagged 'kubernetes' should be findable by someone asking
-    about Kubernetes even if the word never appears in the prose.
+    Title, topics, content — plus text read from attached files, so a
+    question about what's INSIDE a file can find the memory it belongs to.
     """
     parts = [memory.title]
     if memory.topics:
         parts.append(" ".join(memory.topics))
     parts.append(memory.content)
+
+    for attachment in memory.attachments or []:
+        if attachment.extracted_text:
+            parts.append(
+                f"[{attachment.original_filename}]\n"
+                f"{attachment.extracted_text[:ATTACHMENT_TEXT_CHARS]}"
+            )
+
     return "\n".join(parts)
 
 
@@ -35,8 +45,8 @@ def _fit_dimensions(vector: list[float]) -> list[float]:
     """
     Force a vector to the column's dimension.
 
-    Needed only because the mock provider returns short vectors. A
-    real model returns exactly EMBEDDING_DIM and this is a no-op.
+    Needed only for providers that return a different size (the mock).
+    A real model returns exactly EMBEDDING_DIM and this is a no-op.
     """
     if len(vector) == EMBEDDING_DIM:
         return vector
@@ -63,7 +73,7 @@ def embed_memory(db: Session, memory: Memory) -> MemoryEmbedding | None:
     if not raw_vector:
         return None
 
-    # Remove any existing vector from this model, so re-embedding
+    # Replace any existing vector from this model, so re-embedding
     # updates rather than duplicating.
     existing = db.execute(
         select(MemoryEmbedding).where(
@@ -95,12 +105,9 @@ def backfill_embeddings(db: Session, *, limit: int = 500) -> dict:
     """
     provider = get_provider()
 
-    # Memories that already have a vector from this model.
     embedded_ids = set(
         db.execute(
-            select(MemoryEmbedding.memory_id).where(
-                MemoryEmbedding.model == provider.name
-            )
+            select(MemoryEmbedding.memory_id).where(MemoryEmbedding.model == provider.name)
         ).scalars().all()
     )
 
@@ -130,9 +137,7 @@ def embedding_status(db: Session) -> dict:
     total = len(db.execute(select(Memory.id)).scalars().all())
     embedded = len(
         db.execute(
-            select(MemoryEmbedding.memory_id).where(
-                MemoryEmbedding.model == provider.name
-            )
+            select(MemoryEmbedding.memory_id).where(MemoryEmbedding.model == provider.name)
         ).scalars().all()
     )
     return {
