@@ -1,12 +1,69 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0b1020;
+  --background: #070a14;
   --foreground: #e2e8f0;
 }
 
+html,
 body {
-  background: var(--background);
+  height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(1100px 520px at 12% -8%, rgba(99, 102, 241, 0.14), transparent 60%),
+    radial-gradient(900px 480px at 105% 0%, rgba(168, 85, 247, 0.09), transparent 60%),
+    radial-gradient(700px 400px at 50% 110%, rgba(56, 189, 248, 0.05), transparent 60%),
+    var(--background);
+  background-attachment: fixed;
   color: var(--foreground);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Editorial serif for headings */
+.font-display {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  letter-spacing: -0.015em;
+}
+
+/* Brand gradient, used on primary buttons */
+.bg-brand {
+  background-image: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.35s ease-out both;
+}
+
+::selection {
+  background: rgba(129, 140, 248, 0.35);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.28);
 }

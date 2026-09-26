@@ -123,3 +123,45 @@ export async function askQuestion(question: string): Promise<AskResponse> {
   }
   return res.json();
 }
+export type TopicSummary = {
+  topic: string;
+  count: number;
+  last_seen: string;
+};
+
+export type RelatedTopic = {
+  topic: string;
+  shared_memories: number;
+};
+
+export type TopicHistory = {
+  topic: string;
+  total: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  uncertain_count: number;
+  timeline: Memory[];
+  by_type: Record<string, Memory[]>;
+  related_topics: RelatedTopic[];
+};
+
+export async function listTopics(): Promise<TopicSummary[]> {
+  const res = await fetch(`${API_URL}/topics`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to load topics (${res.status})`);
+  return res.json();
+}
+
+/**
+ * Everything recorded about one topic.
+ *
+ * Returns total: 0 rather than failing when the topic is unknown —
+ * "never recorded" is a real answer the UI should display.
+ */
+export async function getTopicHistory(topic: string): Promise<TopicHistory> {
+  const res = await fetch(
+    `${API_URL}/topics/${encodeURIComponent(topic)}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) throw new Error(`Failed to load topic (${res.status})`);
+  return res.json();
+}
