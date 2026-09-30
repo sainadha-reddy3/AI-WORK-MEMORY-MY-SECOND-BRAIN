@@ -10,6 +10,7 @@ Rules enforced here:
     text read from screenshots) — before anything reaches storage
   * text read from a file is stored as derived data, with how it was
     obtained and how confident the machine was
+  * a voice note is labelled as spoken, not typed
 """
 
 import uuid
@@ -29,9 +30,11 @@ from app.services.memory_service import capture_memory, create_memory
 
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB
 
-VALID_KINDS = {"screenshot", "image", "document", "code", "notebook_photo"}
+VALID_KINDS = {"screenshot", "image", "document", "code", "notebook_photo", "audio"}
 
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+
+AUDIO_SUFFIXES = {".webm", ".ogg", ".wav", ".mp3", ".m4a", ".flac"}
 
 DOCUMENT_SUFFIXES = {".pdf", ".txt", ".md", ".docx"}
 
@@ -51,6 +54,7 @@ EVIDENCE_SOURCE = {
     "notebook_photo": "notebook_photo",
     "document": "document",
     "code": "document",
+    "audio": "user_voice",
 }
 
 KIND_LABEL = {
@@ -59,6 +63,7 @@ KIND_LABEL = {
     "notebook_photo": "Notebook photo",
     "document": "Document",
     "code": "Code file",
+    "audio": "Voice recording",
 }
 
 EXCERPT_CHARS = 300
@@ -84,6 +89,8 @@ def classify(filename: str, content_type: str, requested: str | None) -> str:
             raise AttachmentError(f"Unknown kind '{requested}'.")
         return requested
 
+    if (content_type or "").startswith("audio/") or suffix in AUDIO_SUFFIXES:
+        return "audio"
     if content_type in IMAGE_TYPES:
         return "screenshot"
     if name in CODE_FILENAMES or suffix in CODE_SUFFIXES:
@@ -94,8 +101,10 @@ def classify(filename: str, content_type: str, requested: str | None) -> str:
     raise AttachmentError(f"Unsupported file type ({content_type or suffix or 'unknown'}).")
 
 
-def describe_extraction(filename: str, ex: Extraction) -> str:
+def describe_extraction(filename: str, kind: str, ex: Extraction) -> str:
     """Plain-language provenance for the evidence row."""
+    if kind == "audio":
+        return f"Original voice recording: {filename}"
     detail = f"Original file: {filename}"
     if ex.method == "ocr":
         conf = f"{ex.confidence:.0f}%" if ex.confidence is not None else "unknown"
@@ -125,7 +134,7 @@ def _store_file(
     attachment = Attachment(
         kind=kind,
         original_filename=filename[:255],
-        content_type=content_type or "application/octet-stream",
+        content_type=(content_type or "application/octet-stream")[:100],
         size_bytes=len(data),
         sha256=digest,
         storage_backend=storage.name,
@@ -185,7 +194,7 @@ def upload_attachment(
     attachment = _store_file(db, data, filename, content_type, kind, ex)
     note = (note or "").strip()
 
-    file_detail = describe_extraction(filename, ex)
+    file_detail = describe_extraction(filename, kind, ex)
     file_excerpt = ex.text[:EXCERPT_CHARS] if ex.text else None
 
     if existing_memory is not None:
@@ -203,7 +212,7 @@ def upload_attachment(
             db.add(
                 Evidence(
                     memory_id=memory.id,
-                    source_type="user_typed",
+                    source_type="user_voice" if kind == "audio" else "user_typed",
                     source_detail="Note added together with a file",
                     excerpt=note,
                 )
@@ -211,6 +220,18 @@ def upload_attachment(
 
     elif note:
         memory, _ = capture_memory(db, MemoryCapture(text=note))
+
+        # A voice note's text was spoken, not typed. Say so.
+        if kind == "audio":
+            for evidence in memory.evidence:
+                if evidence.source_type == "user_typed":
+                    evidence.source_type = "user_voice"
+                    evidence.source_detail = (
+                        "Transcribed from your voice recording and shown to you "
+                        "for editing before saving. Title, type and topics are "
+                        "AI interpretation."
+                    )
+
         db.add(
             Evidence(
                 memory_id=memory.id,
@@ -255,8 +276,8 @@ def upload_attachment(
 
 def backfill_extraction(db: Session) -> dict:
     """
-    Extract text from attachments that have none yet — including images,
-    now that OCR exists — then re-embed their memories. Safe to rerun.
+    Extract text from attachments that have none yet (including images,
+    via OCR), then re-embed their memories. Safe to rerun.
     """
     pending = db.execute(
         select(Attachment).where(Attachment.extracted_text.is_(None))
@@ -267,6 +288,9 @@ def backfill_extraction(db: Session) -> dict:
     touched: set = set()
 
     for attachment in pending:
+        if attachment.kind == "audio":
+            skipped += 1
+            continue
         try:
             data = read_attachment(attachment)
         except FileNotFoundError:
@@ -315,6 +339,7 @@ def read_attachment(attachment: Attachment) -> bytes:
         raise FileNotFoundError(attachment.storage_key)
     return storage.read(attachment.storage_key)
 
+
 # ------------------------------------------------------------------
 # Reviewing extracted text
 # ------------------------------------------------------------------
@@ -344,9 +369,7 @@ def confirm_attachment_text(db: Session, attachment: Attachment, text: str) -> A
     text = (text or "").replace("\x00", "").strip()
 
     if text and looks_like_secret(text):
-        raise AttachmentError(
-            "This text appears to contain a credential. It was not saved."
-        )
+        raise AttachmentError("This text appears to contain a credential. It was not saved.")
 
     attachment.extracted_text = text or None
     attachment.text_confirmed = True
@@ -367,7 +390,6 @@ def confirm_attachment_text(db: Session, attachment: Attachment, text: str) -> A
 
     db.commit()
 
-    # The confirmed text is what search should see from now on.
     if attachment.memory_id:
         memory = db.get(Memory, attachment.memory_id)
         if memory is not None:

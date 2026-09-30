@@ -236,3 +236,26 @@ export async function confirmAttachmentText(id: string, text: string): Promise<A
   if (!res.ok) throw new Error(await errorMessage(res, "Failed to save text"));
   return res.json();
 }
+/* ---------- voice ---------- */
+
+export type Transcript = {
+  text: string;
+  language: string;
+  language_probability: number;
+  duration: number;
+  confidence: number | null;
+  unclear_segments: number;
+  model: string;
+};
+
+// Transcribe a recording locally with Whisper. Nothing is stored —
+// the recording only becomes a memory when the user saves it.
+export async function transcribeAudio(audio: Blob, language?: string): Promise<Transcript> {
+  const form = new FormData();
+  form.append("file", audio, "recording.webm");
+  if (language && language !== "auto") form.append("language", language);
+
+  const res = await fetch(`${API_URL}/voice/transcribe`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(await errorMessage(res, "Transcription failed"));
+  return res.json();
+}

@@ -9,6 +9,7 @@ import {
   getAttachmentText,
   getTopicHistory,
   listMemories,
+  transcribeAudio,
   uploadAttachment,
   type AskResponse,
   type AttachmentBrief,
@@ -16,6 +17,7 @@ import {
   type CapturePreview,
   type Memory,
   type TopicHistory,
+  type Transcript,
 } from "@/lib/api";
 
 /* ============================================================
@@ -86,6 +88,7 @@ const FILE_ICONS: Record<string, string> = {
   notebook_photo: "📓",
   document: "📄",
   code: "💻",
+  audio: "🎙️",
 };
 
 // What the Attach picker offers. The backend makes the final decision
@@ -95,6 +98,9 @@ const FILE_ACCEPT =
 
 // Below this OCR confidence, an image is flagged as needing review.
 const REVIEW_THRESHOLD = 70;
+
+// Recordings stop automatically here, to stay under the upload limit.
+const MAX_RECORD_SECONDS = 600;
 
 const EXAMPLES = [
   "Fixed an ArgoCD sync failure — the Helm values were wrong, corrected values.yaml and re-synced.",
@@ -132,10 +138,20 @@ export default function Home() {
   const [dragOver, setDragOver] = useState(false);
   const [reviewing, setReviewing] = useState<AttachmentBrief | null>(null);
 
+  // voice
+  const [recording, setRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const [transcribing, setTranscribing] = useState(false);
+  const [lastTranscript, setLastTranscript] = useState<Transcript | null>(null);
+  const [voiceLang, setVoiceLang] = useState("auto");
+
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const notebookInputRef = useRef<HTMLInputElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
     listMemories()
@@ -144,9 +160,11 @@ export default function Home() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Local preview for a pending image, released when no longer needed.
+  // Local preview (image or audio) for a pending file, released when no longer needed.
   useEffect(() => {
-    if (!pendingFile || !pendingFile.type.startsWith("image/")) {
+    const previewable =
+      pendingFile && (pendingFile.type.startsWith("image/") || pendingFile.type.startsWith("audio/"));
+    if (!pendingFile || !previewable) {
       setPendingPreview(null);
       return;
     }
@@ -154,6 +172,18 @@ export default function Home() {
     setPendingPreview(url);
     return () => URL.revokeObjectURL(url);
   }, [pendingFile]);
+
+  // Auto-stop long recordings, and clean up if the page closes mid-recording.
+  useEffect(() => {
+    if (recording && recordSeconds >= MAX_RECORD_SECONDS) stopRecording();
+  }, [recording, recordSeconds]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) window.clearInterval(timerRef.current);
+      recorderRef.current?.stream.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
 
   const today = localISO(new Date());
   const weekStart = localISO(new Date(Date.now() - 6 * 864e5));
@@ -207,7 +237,70 @@ export default function Home() {
   function clearPending() {
     setPendingFile(null);
     setPendingKind(null);
+    setLastTranscript(null);
   }
+
+  /* ---------- voice ---------- */
+
+  async function startRecording() {
+    setError(null);
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError("This browser can't record audio.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        handleRecorded(blob);
+      };
+      recorderRef.current = recorder;
+      recorder.start();
+      setRecordSeconds(0);
+      setRecording(true);
+      timerRef.current = window.setInterval(() => setRecordSeconds((s) => s + 1), 1000);
+    } catch {
+      setError("Microphone access was blocked. Allow it in your browser's address bar and try again.");
+    }
+  }
+
+  function stopRecording() {
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setRecording(false);
+    if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
+  }
+
+  async function handleRecorded(blob: Blob) {
+    if (blob.size === 0) {
+      setError("Nothing was recorded.");
+      return;
+    }
+    setTranscribing(true);
+    try {
+      const transcript = await transcribeAudio(blob, voiceLang);
+      const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
+      const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: blob.type || "audio/webm" });
+      pickFile(file, "audio");
+      setLastTranscript(transcript);
+      // The transcript goes into the box so it can be read and corrected before saving.
+      setInput((prev) => (prev.trim() ? `${prev.trim()}\n${transcript.text}` : transcript.text));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Transcription failed");
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  /* ---------- review ---------- */
 
   async function refreshAfterReview() {
     setReviewing(null);
@@ -294,13 +387,18 @@ export default function Home() {
       ? "Text read by OCR that you haven't confirmed yet."
       : `${visible.length} ${visible.length === 1 ? "memory" : "memories"}`;
 
+  const pendingIsImage = !!pendingFile && pendingFile.type.startsWith("image/");
+  const pendingIsAudio = !!pendingFile && pendingFile.type.startsWith("audio/");
+  const transcriptShaky =
+    !!lastTranscript && (lastTranscript.unclear_segments > 0 || (lastTranscript.confidence ?? 100) < 60);
+
   return (
     <ReviewContext.Provider value={(a) => setReviewing(a)}>
       <div className="flex h-screen flex-col text-slate-200">
         {/* ======================= HEADER ======================= */}
         <header className="flex h-16 shrink-0 items-center gap-4 border-b border-white/5 bg-[#070a14]/60 px-5 backdrop-blur-xl">
           <button onClick={() => showFeed("all")} className="flex shrink-0 items-center gap-3">
-            <MemoryLogo active={asking || saving || !!openingTopic} />
+            <MemoryLogo active={asking || saving || transcribing || !!openingTopic} />
             <div className="hidden text-left sm:block">
               <h1 className="text-[15px] font-semibold tracking-tight text-white">My Work Memory</h1>
               <p className="text-[11px] text-slate-500">Remember. Learn. Grow.</p>
@@ -430,7 +528,7 @@ export default function Home() {
                   Private by design
                 </p>
                 <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                  Stored in your own database. Never invents your history.
+                  Stored in your own database. Voice is transcribed on your machine. Never invents your history.
                 </p>
               </div>
             </div>
@@ -538,25 +636,30 @@ export default function Home() {
                 >
                   {pendingFile && (
                     <div className="mb-2 flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-2">
-                      {pendingPreview ? (
+                      {pendingIsImage && pendingPreview ? (
                         <Picture src={pendingPreview} alt="" className="h-12 w-16 rounded-md object-cover" />
                       ) : (
-                        <span className="flex h-12 w-12 items-center justify-center rounded-md bg-white/5 text-lg">
-                          📄
+                        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-white/5 text-lg">
+                          {pendingIsAudio ? "🎙️" : "📄"}
                         </span>
                       )}
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-xs text-slate-200">
                           {pendingKind === "notebook_photo" ? "📓 " : ""}
-                          {pendingFile.name}
+                          {pendingIsAudio ? "Voice recording" : pendingFile.name}
                         </p>
                         <p className="text-[10px] text-slate-500">
-                          {pendingKind === "notebook_photo"
+                          {pendingIsAudio && lastTranscript
+                            ? `${formatDuration(Math.round(lastTranscript.duration))} · ${languageName(lastTranscript.language)} · transcript is in the box — check it before saving`
+                            : pendingKind === "notebook_photo"
                             ? "Notebook page — handwriting will be read, then you can review it"
                             : `${formatBytes(pendingFile.size)} · add a note describing it (optional)`}
                         </p>
+                        {pendingIsAudio && pendingPreview && (
+                          <AudioPlayer src={pendingPreview} className="mt-1.5 h-8 w-full" />
+                        )}
                       </div>
-                      {pendingPreview && pendingKind !== "notebook_photo" && (
+                      {pendingIsImage && pendingKind !== "notebook_photo" && (
                         <button
                           onClick={() => setPendingKind("notebook_photo")}
                           className="shrink-0 rounded-lg border border-white/10 px-2 py-1 text-[10px] text-slate-400 transition hover:border-indigo-400/40 hover:text-slate-200"
@@ -572,6 +675,12 @@ export default function Home() {
                         ✕
                       </button>
                     </div>
+                  )}
+
+                  {transcriptShaky && (
+                    <p className="mb-2 rounded-lg bg-amber-500/[0.06] px-3 py-1.5 text-[11px] text-amber-200/90">
+                      Some parts were hard to hear and are marked [?like this?]. Please check the text before saving.
+                    </p>
                   )}
 
                   <textarea
@@ -594,24 +703,58 @@ export default function Home() {
                       }
                     }}
                     placeholder={
-                      pendingFile
+                      recording
+                        ? "Listening… click Stop when you're done."
+                        : pendingFile
                         ? "Describe this file (optional) — e.g. K9s showing the pod in CrashLoopBackOff"
-                        : "What did you work on? Describe it naturally — or paste a screenshot."
+                        : "What did you work on? Type, speak, or paste a screenshot."
                     }
                     className="w-full resize-none bg-transparent px-2 pt-1 text-sm leading-relaxed text-slate-100 outline-none placeholder:text-slate-500"
                   />
-                  <div className="mt-2 flex items-center gap-1.5">
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     <ComposerButton icon="📎" label="Attach" onClick={() => fileInputRef.current?.click()} />
                     <ComposerButton icon="🖼️" label="Screenshot" onClick={() => imageInputRef.current?.click()} />
                     <ComposerButton icon="📓" label="Notebook" onClick={() => notebookInputRef.current?.click()} />
-                    <ComposerButton icon="🎙️" label="Voice" soon />
-                    <span className="ml-auto hidden text-[11px] text-slate-600 sm:inline">Ctrl + Enter to save</span>
+
+                    <button
+                      onClick={recording ? stopRecording : startRecording}
+                      disabled={transcribing || saving}
+                      title={recording ? "Stop recording" : "Record a voice note"}
+                      className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition disabled:opacity-40 ${
+                        recording
+                          ? "bg-rose-500/15 text-rose-200 ring-1 ring-inset ring-rose-400/30"
+                          : "text-slate-400 hover:bg-white/[0.05] hover:text-slate-200"
+                      }`}
+                    >
+                      {recording ? (
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" />
+                      ) : (
+                        <span>🎙️</span>
+                      )}
+                      <span>
+                        {transcribing ? "Transcribing…" : recording ? `Stop ${formatDuration(recordSeconds)}` : "Voice"}
+                      </span>
+                    </button>
+                    <select
+                      value={voiceLang}
+                      onChange={(e) => setVoiceLang(e.target.value)}
+                      disabled={recording || transcribing}
+                      title="Language you'll speak"
+                      className="rounded-md border border-white/10 bg-[#0b0f1c] px-1.5 py-1 text-[11px] text-slate-400 outline-none disabled:opacity-40"
+                    >
+                      <option value="auto">Auto</option>
+                      <option value="en">EN</option>
+                      <option value="te">TE</option>
+                      <option value="hi">HI</option>
+                    </select>
+
+                    <span className="ml-auto hidden text-[11px] text-slate-600 lg:inline">Ctrl + Enter to save</span>
                     <button
                       onClick={handleSave}
-                      disabled={saving || (!input.trim() && !pendingFile)}
-                      className="bg-brand ml-auto rounded-xl px-4 py-2 text-xs font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110 disabled:opacity-40 sm:ml-2"
+                      disabled={saving || recording || transcribing || (!input.trim() && !pendingFile)}
+                      className="bg-brand ml-auto rounded-xl px-4 py-2 text-xs font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110 disabled:opacity-40 lg:ml-2"
                     >
-                      {saving ? "Saving…" : pendingFile ? "Save with file" : "Save memory"}
+                      {saving ? "Saving…" : pendingIsAudio ? "Save voice note" : pendingFile ? "Save with file" : "Save memory"}
                     </button>
                   </div>
                 </div>
@@ -628,6 +771,10 @@ export default function Home() {
             ) : mode === "answer" ? (
               <Panel title="About this answer">
                 <AnswerInfo answer={answer!} />
+              </Panel>
+            ) : lastTranscript ? (
+              <Panel title="What Whisper heard" subtitle="Transcribed on your machine">
+                <TranscriptInfo transcript={lastTranscript} />
               </Panel>
             ) : lastPreview ? (
               <Panel title="What the AI understood" subtitle="From your last saved memory">
@@ -718,7 +865,6 @@ function ReviewDialog({ attachment, onClose, onConfirmed }: ReviewDialogProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
       <div className="animate-fade-up grid max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-white/10 bg-[#0b0f1c] shadow-2xl md:grid-cols-2">
-        {/* original */}
         <div className="flex min-h-0 flex-col border-b border-white/5 p-4 md:border-b-0 md:border-r">
           <div className="mb-3 flex items-center justify-between">
             <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">Original</p>
@@ -735,7 +881,6 @@ function ReviewDialog({ attachment, onClose, onConfirmed }: ReviewDialogProps) {
           </div>
         </div>
 
-        {/* transcription */}
         <div className="flex min-h-0 flex-col p-5">
           <p className="text-[11px] font-medium uppercase tracking-wider text-indigo-300/70">Review transcription</p>
           <h3 className="font-display mt-1 text-2xl text-white">What does this say?</h3>
@@ -1040,6 +1185,25 @@ function AnswerInfo({ answer }: { answer: AskResponse }) {
   );
 }
 
+function TranscriptInfo({ transcript }: { transcript: Transcript }) {
+  return (
+    <div className="space-y-3 text-xs">
+      <InfoRow
+        label="Language"
+        value={`${languageName(transcript.language)} (${Math.round(transcript.language_probability)}%)`}
+      />
+      <InfoRow label="Length" value={formatDuration(Math.round(transcript.duration))} />
+      <InfoRow label="Confidence" value={transcript.confidence != null ? `${Math.round(transcript.confidence)}%` : "—"} />
+      <InfoRow label="Unclear parts" value={String(transcript.unclear_segments)} />
+      <InfoRow label="Model" value={`Whisper ${transcript.model}`} />
+      <p className="border-t border-white/5 pt-3 text-[11px] leading-relaxed text-slate-500">
+        Transcribed locally — your audio never left this machine. Read the text in the box and fix anything
+        wrong before saving. The recording itself is kept with the memory.
+      </p>
+    </div>
+  );
+}
+
 function PreviewPanel({ preview }: { preview: CapturePreview }) {
   return (
     <div className="space-y-3">
@@ -1072,7 +1236,7 @@ function PreviewPanel({ preview }: { preview: CapturePreview }) {
 
 function HowItWorks() {
   const steps = [
-    ["✍️", "Describe your work", "In your own words — no forms."],
+    ["✍️", "Describe your work", "Type or speak — no forms."],
     ["📎", "Attach evidence", "Paste a screenshot or drop a file. Originals are kept."],
     ["📓", "Photograph your notebook", "Handwriting is read, and you confirm it."],
     ["🔎", "Ask anytime", "Answers come only from what you recorded."],
@@ -1123,7 +1287,8 @@ function AttachmentList({ items }: { items: AttachmentBrief[] }) {
   const review = useContext(ReviewContext);
   if (items.length === 0) return null;
   const images = items.filter((a) => a.content_type.startsWith("image/"));
-  const files = items.filter((a) => !a.content_type.startsWith("image/"));
+  const audios = items.filter((a) => a.content_type.startsWith("audio/"));
+  const files = items.filter((a) => !a.content_type.startsWith("image/") && !a.content_type.startsWith("audio/"));
 
   return (
     <div className="mt-3 space-y-2">
@@ -1151,6 +1316,16 @@ function AttachmentList({ items }: { items: AttachmentBrief[] }) {
           ))}
         </div>
       )}
+      {audios.map((a) => (
+        <div
+          key={a.id}
+          className="flex items-center gap-2.5 rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2"
+        >
+          <span className="text-sm">🎙️</span>
+          <AudioPlayer src={attachmentUrl(a.id)} className="h-8 min-w-0 flex-1" />
+          <span className="text-[10px] text-slate-500">{formatBytes(a.size_bytes)}</span>
+        </div>
+      ))}
       {files.map((a) => (
         <ExternalLink
           key={a.id}
@@ -1201,8 +1376,8 @@ function OcrBadge({ attachment, onReview }: OcrBadgeProps) {
 }
 
 /*
- * Links and images are created in code rather than written as tags,
- * so copying this file can never strip them out.
+ * Links, images and audio players are created in code rather than
+ * written as tags, so copying this file can never strip them out.
  */
 type ExternalLinkProps = {
   href: string;
@@ -1219,6 +1394,12 @@ type PictureProps = { src: string; alt: string; className?: string };
 
 function Picture({ src, alt, className }: PictureProps) {
   return createElement("img", { src, alt, className });
+}
+
+type AudioPlayerProps = { src: string; className?: string };
+
+function AudioPlayer({ src, className }: AudioPlayerProps) {
+  return createElement("audio", { src, className, controls: true, preload: "none" });
 }
 
 type TopicChipsProps = {
@@ -1486,6 +1667,17 @@ function needsReview(m: Memory): boolean {
 
 function countMarkers(text: string): number {
   return (text.match(/\[\?[^\]]*\?\]|\[unreadable\]/g) ?? []).length;
+}
+
+function languageName(code: string): string {
+  const names: Record<string, string> = { en: "English", te: "Telugu", hi: "Hindi" };
+  return names[code] ?? code;
+}
+
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = String(seconds % 60).padStart(2, "0");
+  return `${m}:${s}`;
 }
 
 function localISO(d: Date): string {
