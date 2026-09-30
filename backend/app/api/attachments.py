@@ -1,5 +1,5 @@
 """
-Attachment endpoints — upload originals, fetch them back.
+Attachment endpoints — upload originals, fetch them back, review text.
 """
 
 import uuid
@@ -10,16 +10,26 @@ from sqlalchemy.orm import Session
 from app.core.storage import safe_filename
 from app.db.session import get_db
 from app.schemas import AttachmentRead, UploadResult
+from app.schemas.attachment import AttachmentText, ConfirmText
 from app.services.attachment_service import (
     MAX_UPLOAD_BYTES,
     AttachmentError,
+    confirm_attachment_text,
     get_attachment,
+    get_attachment_text,
     list_attachments,
     read_attachment,
     upload_attachment,
 )
 
 router = APIRouter(prefix="/attachments", tags=["attachments"])
+
+
+def _load(db: Session, attachment_id: uuid.UUID):
+    attachment = get_attachment(db, attachment_id)
+    if attachment is None:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    return attachment
 
 
 @router.post("", response_model=UploadResult, status_code=201)
@@ -35,9 +45,8 @@ def upload(
 
     Optional `note` describes it (becomes an AI-structured memory).
     Optional `memory_id` attaches it to an existing memory instead.
+    Optional `kind` — e.g. "notebook_photo" for handwritten pages.
     """
-    # Read one byte past the limit, so oversize files are detected
-    # without loading an arbitrarily large upload into memory.
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
 
     try:
@@ -73,26 +82,34 @@ def list_all(
 
 @router.get("/{attachment_id}", response_model=AttachmentRead)
 def metadata(attachment_id: uuid.UUID, db: Session = Depends(get_db)):
-    attachment = get_attachment(db, attachment_id)
-    if attachment is None:
-        raise HTTPException(status_code=404, detail="Attachment not found.")
-    return attachment
+    return _load(db, attachment_id)
+
+
+@router.get("/{attachment_id}/text", response_model=AttachmentText)
+def read_text(attachment_id: uuid.UUID, db: Session = Depends(get_db)):
+    """The text read from a file, with how it was obtained and whether it's confirmed."""
+    return get_attachment_text(_load(db, attachment_id))
+
+
+@router.put("/{attachment_id}/text", response_model=AttachmentText)
+def confirm_text(attachment_id: uuid.UUID, data: ConfirmText, db: Session = Depends(get_db)):
+    """Save the user's reviewed transcription and mark it confirmed."""
+    attachment = _load(db, attachment_id)
+    try:
+        attachment = confirm_attachment_text(db, attachment, data.text)
+    except AttachmentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return get_attachment_text(attachment)
 
 
 @router.get("/{attachment_id}/file")
 def download(attachment_id: uuid.UUID, db: Session = Depends(get_db)):
     """Serve the original file exactly as uploaded."""
-    attachment = get_attachment(db, attachment_id)
-    if attachment is None:
-        raise HTTPException(status_code=404, detail="Attachment not found.")
-
+    attachment = _load(db, attachment_id)
     try:
         data = read_attachment(attachment)
     except FileNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail="The original file is missing from storage.",
-        )
+        raise HTTPException(status_code=404, detail="The original file is missing from storage.")
 
     return Response(
         content=data,

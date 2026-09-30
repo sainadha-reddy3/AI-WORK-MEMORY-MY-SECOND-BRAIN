@@ -26,6 +26,9 @@ export type AttachmentBrief = {
   original_filename: string;
   content_type: string;
   size_bytes: number;
+  extraction_method: string | null;
+  extraction_confidence: number | null;
+  text_confirmed: boolean;
 };
 
 export type Memory = {
@@ -113,6 +116,17 @@ export type UploadResult = {
   memory: Memory;
 };
 
+export type AttachmentText = {
+  id: string;
+  original_filename: string;
+  kind: string;
+  content_type: string;
+  extraction_method: string | null;
+  extraction_confidence: number | null;
+  text_confirmed: boolean;
+  text: string | null;
+};
+
 /* ---------- helpers ---------- */
 
 // Turn an error response into a readable message. FastAPI puts the
@@ -188,13 +202,13 @@ export async function getTopicHistory(topic: string): Promise<TopicHistory> {
 
 /* ---------- attachments ---------- */
 
-// Upload a file as evidence. An optional note describes it and becomes
-// an AI-structured memory; without one, nothing about the file's
-// content is invented.
-export async function uploadAttachment(file: File, note?: string): Promise<UploadResult> {
+// Upload a file as evidence. An optional note describes it; an optional
+// kind (e.g. "notebook_photo") says what sort of file it is.
+export async function uploadAttachment(file: File, note?: string, kind?: string): Promise<UploadResult> {
   const form = new FormData();
   form.append("file", file);
   if (note && note.trim()) form.append("note", note.trim());
+  if (kind) form.append("kind", kind);
 
   const res = await fetch(`${API_URL}/attachments`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await errorMessage(res, "Upload failed"));
@@ -204,4 +218,21 @@ export async function uploadAttachment(file: File, note?: string): Promise<Uploa
 // URL of the original file, exactly as uploaded.
 export function attachmentUrl(id: string): string {
   return `${API_URL}/attachments/${id}/file`;
+}
+
+export async function getAttachmentText(id: string): Promise<AttachmentText> {
+  const res = await fetch(`${API_URL}/attachments/${id}/text`, { cache: "no-store" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Failed to load text"));
+  return res.json();
+}
+
+// Save the user's reviewed transcription. From then on it counts as confirmed.
+export async function confirmAttachmentText(id: string, text: string): Promise<AttachmentText> {
+  const res = await fetch(`${API_URL}/attachments/${id}/text`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "Failed to save text"));
+  return res.json();
 }

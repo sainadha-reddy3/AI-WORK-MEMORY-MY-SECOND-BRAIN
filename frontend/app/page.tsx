@@ -1,15 +1,18 @@
 "use client";
 
-import { createElement, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, createElement, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   askQuestion,
   attachmentUrl,
   captureMemory,
+  confirmAttachmentText,
+  getAttachmentText,
   getTopicHistory,
   listMemories,
   uploadAttachment,
   type AskResponse,
   type AttachmentBrief,
+  type AttachmentText,
   type CapturePreview,
   type Memory,
   type TopicHistory,
@@ -90,13 +93,21 @@ const FILE_ICONS: Record<string, string> = {
 const FILE_ACCEPT =
   "image/*,.pdf,.txt,.md,.docx,.py,.yaml,.yml,.tf,.tfvars,.hcl,.json,.sh,.toml,.ini,.conf,.js,.ts,.go,.sql,.xml";
 
+// Below this OCR confidence, an image is flagged as needing review.
+const REVIEW_THRESHOLD = 70;
+
 const EXAMPLES = [
   "Fixed an ArgoCD sync failure — the Helm values were wrong, corrected values.yaml and re-synced.",
   "Investigated a pod in CrashLoopBackOff with K9s. Found a missing env var in the deployment.",
   "I think I changed the Workload Identity binding, but I'm not sure that was the fix.",
 ];
 
-type Filter = "all" | "today" | "week" | "files" | `type:${string}`;
+type Filter = "all" | "today" | "week" | "files" | "review" | `type:${string}`;
+
+// Lets any attachment thumbnail open the review panel without passing
+// a callback down through every component in between.
+type ReviewFn = (a: AttachmentBrief) => void;
+const ReviewContext = createContext<ReviewFn>(() => {});
 
 /* ============================================================
    Page
@@ -116,12 +127,15 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [lastPreview, setLastPreview] = useState<CapturePreview | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [pendingKind, setPendingKind] = useState<string | null>(null);
   const [pendingPreview, setPendingPreview] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [reviewing, setReviewing] = useState<AttachmentBrief | null>(null);
 
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const notebookInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     listMemories()
@@ -149,13 +163,15 @@ export default function Home() {
     let todayCount = 0;
     let weekCount = 0;
     let filesCount = 0;
+    let reviewCount = 0;
     for (const m of memories) {
       byType[m.memory_type] = (byType[m.memory_type] ?? 0) + 1;
       if (m.occurred_on === today) todayCount++;
       if (m.occurred_on >= weekStart) weekCount++;
       if ((m.attachments ?? []).length > 0) filesCount++;
+      if (needsReview(m)) reviewCount++;
     }
-    return { byType, today: todayCount, week: weekCount, files: filesCount };
+    return { byType, today: todayCount, week: weekCount, files: filesCount, review: reviewCount };
   }, [memories, today, weekStart]);
 
   const topics = useMemo(() => topicCounts(memories), [memories]);
@@ -167,6 +183,7 @@ export default function Home() {
         if (filter === "today") return m.occurred_on === today;
         if (filter === "week") return m.occurred_on >= weekStart;
         if (filter === "files") return (m.attachments ?? []).length > 0;
+        if (filter === "review") return needsReview(m);
         return m.memory_type === filter.slice(5);
       }),
     [memories, filter, today, weekStart]
@@ -180,10 +197,26 @@ export default function Home() {
     setFilter(f);
   }
 
-  function pickFile(file: File | null) {
+  function pickFile(file: File | null, kind: string | null = null) {
     setError(null);
     setPendingFile(file);
+    setPendingKind(file ? kind : null);
     if (file) composerRef.current?.focus();
+  }
+
+  function clearPending() {
+    setPendingFile(null);
+    setPendingKind(null);
+  }
+
+  async function refreshAfterReview() {
+    setReviewing(null);
+    try {
+      setMemories(await listMemories());
+      if (topic) setTopic(await getTopicHistory(topic.topic));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not refresh");
+    }
   }
 
   async function openTopic(t: string) {
@@ -207,12 +240,14 @@ export default function Home() {
     setError(null);
     try {
       if (pendingFile) {
-        // The file is stored as evidence; the note (if any) becomes
-        // an AI-structured memory alongside it.
-        const { memory } = await uploadAttachment(pendingFile, text);
+        const { memory, attachment } = await uploadAttachment(pendingFile, text, pendingKind ?? undefined);
         setMemories((prev) => [memory, ...prev]);
-        setPendingFile(null);
+        clearPending();
         setLastPreview(null);
+        // Handwriting almost always needs a human look — open the review straight away.
+        if (attachment.kind === "notebook_photo" && attachment.extraction_method === "ocr") {
+          setReviewing(attachment);
+        }
       } else {
         const { memory, preview } = await captureMemory(text);
         setMemories((prev) => [memory, ...prev]);
@@ -255,339 +290,501 @@ export default function Home() {
       ? "Answered only from what you recorded."
       : loading
       ? "Loading your memories…"
+      : filter === "review"
+      ? "Text read by OCR that you haven't confirmed yet."
       : `${visible.length} ${visible.length === 1 ? "memory" : "memories"}`;
 
   return (
-    <div className="flex h-screen flex-col text-slate-200">
-      {/* ======================= HEADER ======================= */}
-      <header className="flex h-16 shrink-0 items-center gap-4 border-b border-white/5 bg-[#070a14]/60 px-5 backdrop-blur-xl">
-        <button onClick={() => showFeed("all")} className="flex shrink-0 items-center gap-3">
-          <MemoryLogo active={asking || saving || !!openingTopic} />
-          <div className="hidden text-left sm:block">
-            <h1 className="text-[15px] font-semibold tracking-tight text-white">My Work Memory</h1>
-            <p className="text-[11px] text-slate-500">Remember. Learn. Grow.</p>
-          </div>
-        </button>
-
-        <div className="mx-auto w-full max-w-2xl">
-          <div className="group relative flex items-center">
-            <SearchIcon className="pointer-events-none absolute left-4 h-4 w-4 text-slate-500 transition group-focus-within:text-indigo-300" />
-            <input
-              type="text"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleAsk()}
-              placeholder="Ask your memory — e.g. How did I fix the ArgoCD sync issue?"
-              className="h-11 w-full rounded-full border border-white/10 bg-white/[0.03] pl-11 pr-28 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-indigo-400/50 focus:bg-white/[0.05] focus:ring-4 focus:ring-indigo-500/10"
-            />
-            <button
-              onClick={handleAsk}
-              disabled={asking || !question.trim()}
-              className="bg-brand absolute right-1.5 h-8 rounded-full px-4 text-xs font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110 disabled:opacity-40"
-            >
-              {asking ? "Thinking…" : "Ask"}
-            </button>
-          </div>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="hidden rounded-full border border-white/10 px-2.5 py-1 text-[11px] font-medium text-slate-400 sm:block">
-            EN
-          </span>
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 text-xs font-semibold text-white ring-2 ring-white/10">
-            SR
-          </div>
-        </div>
-      </header>
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* ======================= LEFT ======================= */}
-        <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-white/5 px-3 py-4 md:flex lg:w-64">
-          <button
-            onClick={() => {
-              showFeed("all");
-              composerRef.current?.focus();
-            }}
-            className="bg-brand mb-5 flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110"
-          >
-            <span className="text-base leading-none">＋</span> New memory
+    <ReviewContext.Provider value={(a) => setReviewing(a)}>
+      <div className="flex h-screen flex-col text-slate-200">
+        {/* ======================= HEADER ======================= */}
+        <header className="flex h-16 shrink-0 items-center gap-4 border-b border-white/5 bg-[#070a14]/60 px-5 backdrop-blur-xl">
+          <button onClick={() => showFeed("all")} className="flex shrink-0 items-center gap-3">
+            <MemoryLogo active={asking || saving || !!openingTopic} />
+            <div className="hidden text-left sm:block">
+              <h1 className="text-[15px] font-semibold tracking-tight text-white">My Work Memory</h1>
+              <p className="text-[11px] text-slate-500">Remember. Learn. Grow.</p>
+            </div>
           </button>
 
-          <SidebarItem icon="🕐" label="Reconstruct my day" badge="Soon" />
-
-          <SectionLabel text="My memory" />
-          <SidebarItem
-            icon="📚"
-            label="All memories"
-            count={memories.length}
-            active={mode === "feed" && filter === "all"}
-            onClick={() => showFeed("all")}
-          />
-          <SidebarItem
-            icon="☀️"
-            label="Today"
-            count={counts.today}
-            active={mode === "feed" && filter === "today"}
-            onClick={() => showFeed("today")}
-          />
-          <SidebarItem
-            icon="🗓️"
-            label="This week"
-            count={counts.week}
-            active={mode === "feed" && filter === "week"}
-            onClick={() => showFeed("week")}
-          />
-          <SidebarItem
-            icon="📎"
-            label="With files"
-            count={counts.files}
-            active={mode === "feed" && filter === "files"}
-            onClick={() => showFeed("files")}
-          />
-
-          <SectionLabel text="Topics" />
-          {topics.length === 0 ? (
-            <p className="px-2.5 text-xs text-slate-600">Topics appear as you record memories.</p>
-          ) : (
-            topics.map(([t, n]) => (
-              <SidebarItem
-                key={t}
-                icon="#"
-                label={t}
-                count={n}
-                active={topic?.topic === t}
-                loading={openingTopic === t}
-                onClick={() => openTopic(t)}
+          <div className="mx-auto w-full max-w-2xl">
+            <div className="group relative flex items-center">
+              <SearchIcon className="pointer-events-none absolute left-4 h-4 w-4 text-slate-500 transition group-focus-within:text-indigo-300" />
+              <input
+                type="text"
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAsk()}
+                placeholder="Ask your memory — e.g. How did I fix the ArgoCD sync issue?"
+                className="h-11 w-full rounded-full border border-white/10 bg-white/[0.03] pl-11 pr-28 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-indigo-400/50 focus:bg-white/[0.05] focus:ring-4 focus:ring-indigo-500/10"
               />
-            ))
-          )}
+              <button
+                onClick={handleAsk}
+                disabled={asking || !question.trim()}
+                className="bg-brand absolute right-1.5 h-8 rounded-full px-4 text-xs font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110 disabled:opacity-40"
+              >
+                {asking ? "Thinking…" : "Ask"}
+              </button>
+            </div>
+          </div>
 
-          {Object.keys(counts.byType).length > 0 && (
-            <>
-              <SectionLabel text="Types" />
-              {TYPE_ORDER.filter((t) => counts.byType[t]).map((t) => (
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="hidden rounded-full border border-white/10 px-2.5 py-1 text-[11px] font-medium text-slate-400 sm:block">
+              EN
+            </span>
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 text-xs font-semibold text-white ring-2 ring-white/10">
+              SR
+            </div>
+          </div>
+        </header>
+
+        <div className="flex flex-1 overflow-hidden">
+          {/* ======================= LEFT ======================= */}
+          <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-white/5 px-3 py-4 md:flex lg:w-64">
+            <button
+              onClick={() => {
+                showFeed("all");
+                composerRef.current?.focus();
+              }}
+              className="bg-brand mb-5 flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110"
+            >
+              <span className="text-base leading-none">＋</span> New memory
+            </button>
+
+            <SidebarItem icon="🕐" label="Reconstruct my day" badge="Soon" />
+
+            <SectionLabel text="My memory" />
+            <SidebarItem
+              icon="📚"
+              label="All memories"
+              count={memories.length}
+              active={mode === "feed" && filter === "all"}
+              onClick={() => showFeed("all")}
+            />
+            <SidebarItem
+              icon="☀️"
+              label="Today"
+              count={counts.today}
+              active={mode === "feed" && filter === "today"}
+              onClick={() => showFeed("today")}
+            />
+            <SidebarItem
+              icon="🗓️"
+              label="This week"
+              count={counts.week}
+              active={mode === "feed" && filter === "week"}
+              onClick={() => showFeed("week")}
+            />
+            <SidebarItem
+              icon="📎"
+              label="With files"
+              count={counts.files}
+              active={mode === "feed" && filter === "files"}
+              onClick={() => showFeed("files")}
+            />
+            <SidebarItem
+              icon="🔍"
+              label="Needs review"
+              count={counts.review}
+              active={mode === "feed" && filter === "review"}
+              onClick={() => showFeed("review")}
+            />
+
+            <SectionLabel text="Topics" />
+            {topics.length === 0 ? (
+              <p className="px-2.5 text-xs text-slate-600">Topics appear as you record memories.</p>
+            ) : (
+              topics.map(([t, n]) => (
                 <SidebarItem
                   key={t}
-                  icon={meta(t).icon}
-                  label={meta(t).section}
-                  count={counts.byType[t]}
-                  active={mode === "feed" && filter === `type:${t}`}
-                  onClick={() => showFeed(`type:${t}`)}
+                  icon="#"
+                  label={t}
+                  count={n}
+                  active={topic?.topic === t}
+                  loading={openingTopic === t}
+                  onClick={() => openTopic(t)}
                 />
-              ))}
-            </>
-          )}
+              ))
+            )}
 
-          <div className="mt-auto pt-6">
-            <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
-              <p className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                Private by design
-              </p>
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                Stored in your own database. Never invents your history.
-              </p>
-            </div>
-          </div>
-        </aside>
+            {Object.keys(counts.byType).length > 0 && (
+              <>
+                <SectionLabel text="Types" />
+                {TYPE_ORDER.filter((t) => counts.byType[t]).map((t) => (
+                  <SidebarItem
+                    key={t}
+                    icon={meta(t).icon}
+                    label={meta(t).section}
+                    count={counts.byType[t]}
+                    active={mode === "feed" && filter === `type:${t}`}
+                    onClick={() => showFeed(`type:${t}`)}
+                  />
+                ))}
+              </>
+            )}
 
-        {/* ======================= CENTER ======================= */}
-        <main className="flex min-w-0 flex-1 flex-col">
-          <div className="px-8 pb-4 pt-7">
-            <div className="mx-auto flex max-w-3xl items-end justify-between gap-4">
-              <div className="min-w-0">
-                <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-indigo-300/70">{eyebrow}</p>
-                <h2 className="font-display mt-1 truncate text-3xl text-white">{title}</h2>
-                <p className="mt-1 text-xs text-slate-500">{subtitle}</p>
+            <div className="mt-auto pt-6">
+              <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+                <p className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                  Private by design
+                </p>
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                  Stored in your own database. Never invents your history.
+                </p>
               </div>
-              {mode !== "feed" && (
-                <button
-                  onClick={() => showFeed(filter)}
-                  className="shrink-0 rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-400 transition hover:border-white/20 hover:text-slate-200"
-                >
-                  ← Back to memories
-                </button>
-              )}
             </div>
-          </div>
+          </aside>
 
-          <div className="flex-1 overflow-y-auto px-8 pb-6">
-            <div className="mx-auto max-w-3xl">
-              {mode === "topic" ? (
-                <TopicView history={topic!} onOpenTopic={openTopic} />
-              ) : mode === "answer" ? (
-                <AnswerView answer={answer!} onOpenTopic={openTopic} />
-              ) : (
-                <FeedView
-                  memories={visible}
-                  loading={loading}
-                  filter={filter}
-                  onOpenTopic={openTopic}
-                  onExample={(text) => {
-                    setInput(text);
-                    composerRef.current?.focus();
-                  }}
-                />
-              )}
-            </div>
-          </div>
-
-          {/* composer */}
-          <div className="px-8 pb-6">
-            <div className="mx-auto max-w-3xl">
-              {error && (
-                <div className="mb-3 flex items-start justify-between gap-3 rounded-xl border border-rose-500/20 bg-rose-500/[0.06] px-4 py-2.5 text-xs text-rose-200">
-                  <span>{error}</span>
-                  <button onClick={() => setError(null)} className="text-rose-300/70 hover:text-rose-200">
-                    ✕
-                  </button>
+          {/* ======================= CENTER ======================= */}
+          <main className="flex min-w-0 flex-1 flex-col">
+            <div className="px-8 pb-4 pt-7">
+              <div className="mx-auto flex max-w-3xl items-end justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-indigo-300/70">{eyebrow}</p>
+                  <h2 className="font-display mt-1 truncate text-3xl text-white">{title}</h2>
+                  <p className="mt-1 text-xs text-slate-500">{subtitle}</p>
                 </div>
-              )}
+                {mode !== "feed" && (
+                  <button
+                    onClick={() => showFeed(filter)}
+                    className="shrink-0 rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-400 transition hover:border-white/20 hover:text-slate-200"
+                  >
+                    ← Back to memories
+                  </button>
+                )}
+              </div>
+            </div>
 
-              <input
-                ref={fileInputRef}
-                type="file"
-                hidden
-                accept={FILE_ACCEPT}
-                onChange={(e) => {
-                  pickFile(e.target.files?.[0] ?? null);
-                  e.target.value = "";
-                }}
-              />
-              <input
-                ref={imageInputRef}
-                type="file"
-                hidden
-                accept="image/*"
-                onChange={(e) => {
-                  pickFile(e.target.files?.[0] ?? null);
-                  e.target.value = "";
-                }}
-              />
+            <div className="flex-1 overflow-y-auto px-8 pb-6">
+              <div className="mx-auto max-w-3xl">
+                {mode === "topic" ? (
+                  <TopicView history={topic!} onOpenTopic={openTopic} />
+                ) : mode === "answer" ? (
+                  <AnswerView answer={answer!} onOpenTopic={openTopic} />
+                ) : (
+                  <FeedView
+                    memories={visible}
+                    loading={loading}
+                    filter={filter}
+                    onOpenTopic={openTopic}
+                    onExample={(text) => {
+                      setInput(text);
+                      composerRef.current?.focus();
+                    }}
+                  />
+                )}
+              </div>
+            </div>
 
-              <div
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragOver(true);
-                }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragOver(false);
-                  const dropped = e.dataTransfer.files?.[0];
-                  if (dropped) pickFile(dropped);
-                }}
-                className={`rounded-2xl border bg-white/[0.03] p-3 shadow-2xl shadow-black/40 backdrop-blur-xl transition focus-within:border-indigo-400/40 focus-within:ring-4 focus-within:ring-indigo-500/10 ${
-                  dragOver ? "border-indigo-400/60 ring-4 ring-indigo-500/20" : "border-white/10"
-                }`}
-              >
-                {pendingFile && (
-                  <div className="mb-2 flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-2">
-                    {pendingPreview ? (
-                      <Picture src={pendingPreview} alt="" className="h-12 w-16 rounded-md object-cover" />
-                    ) : (
-                      <span className="flex h-12 w-12 items-center justify-center rounded-md bg-white/5 text-lg">
-                        📄
-                      </span>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs text-slate-200">{pendingFile.name}</p>
-                      <p className="text-[10px] text-slate-500">
-                        {formatBytes(pendingFile.size)} · add a note describing it (optional)
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setPendingFile(null)}
-                      className="px-2 text-slate-500 hover:text-slate-200"
-                      title="Remove file"
-                    >
+            {/* composer */}
+            <div className="px-8 pb-6">
+              <div className="mx-auto max-w-3xl">
+                {error && (
+                  <div className="mb-3 flex items-start justify-between gap-3 rounded-xl border border-rose-500/20 bg-rose-500/[0.06] px-4 py-2.5 text-xs text-rose-200">
+                    <span>{error}</span>
+                    <button onClick={() => setError(null)} className="text-rose-300/70 hover:text-rose-200">
                       ✕
                     </button>
                   </div>
                 )}
 
-                <textarea
-                  ref={composerRef}
-                  rows={2}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                      e.preventDefault();
-                      handleSave();
-                    }
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  hidden
+                  accept={FILE_ACCEPT}
+                  onChange={(e) => {
+                    pickFile(e.target.files?.[0] ?? null);
+                    e.target.value = "";
                   }}
-                  onPaste={(e) => {
-                    // Pasting a screenshot (Win+Shift+S, then Ctrl+V)
-                    // attaches it directly.
-                    const pasted = Array.from(e.clipboardData.files).find((f) => f.type.startsWith("image/"));
-                    if (pasted) {
-                      e.preventDefault();
-                      pickFile(new File([pasted], `screenshot-${Date.now()}.png`, { type: pasted.type }));
-                    }
-                  }}
-                  placeholder={
-                    pendingFile
-                      ? "Describe this file (optional) — e.g. K9s showing the pod in CrashLoopBackOff"
-                      : "What did you work on? Describe it naturally — or paste a screenshot."
-                  }
-                  className="w-full resize-none bg-transparent px-2 pt-1 text-sm leading-relaxed text-slate-100 outline-none placeholder:text-slate-500"
                 />
-                <div className="mt-2 flex items-center gap-1.5">
-                  <ComposerButton icon="📎" label="Attach" onClick={() => fileInputRef.current?.click()} />
-                  <ComposerButton icon="🖼️" label="Screenshot" onClick={() => imageInputRef.current?.click()} />
-                  <ComposerButton icon="🎙️" label="Voice" soon />
-                  <span className="ml-auto hidden text-[11px] text-slate-600 sm:inline">Ctrl + Enter to save</span>
-                  <button
-                    onClick={handleSave}
-                    disabled={saving || (!input.trim() && !pendingFile)}
-                    className="bg-brand ml-auto rounded-xl px-4 py-2 text-xs font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110 disabled:opacity-40 sm:ml-2"
-                  >
-                    {saving ? "Saving…" : pendingFile ? "Save with file" : "Save memory"}
-                  </button>
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  hidden
+                  accept="image/*"
+                  onChange={(e) => {
+                    pickFile(e.target.files?.[0] ?? null);
+                    e.target.value = "";
+                  }}
+                />
+                <input
+                  ref={notebookInputRef}
+                  type="file"
+                  hidden
+                  accept="image/*"
+                  onChange={(e) => {
+                    pickFile(e.target.files?.[0] ?? null, "notebook_photo");
+                    e.target.value = "";
+                  }}
+                />
+
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOver(true);
+                  }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOver(false);
+                    const dropped = e.dataTransfer.files?.[0];
+                    if (dropped) pickFile(dropped);
+                  }}
+                  className={`rounded-2xl border bg-white/[0.03] p-3 shadow-2xl shadow-black/40 backdrop-blur-xl transition focus-within:border-indigo-400/40 focus-within:ring-4 focus-within:ring-indigo-500/10 ${
+                    dragOver ? "border-indigo-400/60 ring-4 ring-indigo-500/20" : "border-white/10"
+                  }`}
+                >
+                  {pendingFile && (
+                    <div className="mb-2 flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-2">
+                      {pendingPreview ? (
+                        <Picture src={pendingPreview} alt="" className="h-12 w-16 rounded-md object-cover" />
+                      ) : (
+                        <span className="flex h-12 w-12 items-center justify-center rounded-md bg-white/5 text-lg">
+                          📄
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs text-slate-200">
+                          {pendingKind === "notebook_photo" ? "📓 " : ""}
+                          {pendingFile.name}
+                        </p>
+                        <p className="text-[10px] text-slate-500">
+                          {pendingKind === "notebook_photo"
+                            ? "Notebook page — handwriting will be read, then you can review it"
+                            : `${formatBytes(pendingFile.size)} · add a note describing it (optional)`}
+                        </p>
+                      </div>
+                      {pendingPreview && pendingKind !== "notebook_photo" && (
+                        <button
+                          onClick={() => setPendingKind("notebook_photo")}
+                          className="shrink-0 rounded-lg border border-white/10 px-2 py-1 text-[10px] text-slate-400 transition hover:border-indigo-400/40 hover:text-slate-200"
+                        >
+                          📓 It&apos;s a notebook page
+                        </button>
+                      )}
+                      <button
+                        onClick={clearPending}
+                        className="px-2 text-slate-500 hover:text-slate-200"
+                        title="Remove file"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+
+                  <textarea
+                    ref={composerRef}
+                    rows={2}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        handleSave();
+                      }
+                    }}
+                    onPaste={(e) => {
+                      // Pasting a screenshot (Win+Shift+S, then Ctrl+V) attaches it directly.
+                      const pasted = Array.from(e.clipboardData.files).find((f) => f.type.startsWith("image/"));
+                      if (pasted) {
+                        e.preventDefault();
+                        pickFile(new File([pasted], `screenshot-${Date.now()}.png`, { type: pasted.type }));
+                      }
+                    }}
+                    placeholder={
+                      pendingFile
+                        ? "Describe this file (optional) — e.g. K9s showing the pod in CrashLoopBackOff"
+                        : "What did you work on? Describe it naturally — or paste a screenshot."
+                    }
+                    className="w-full resize-none bg-transparent px-2 pt-1 text-sm leading-relaxed text-slate-100 outline-none placeholder:text-slate-500"
+                  />
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <ComposerButton icon="📎" label="Attach" onClick={() => fileInputRef.current?.click()} />
+                    <ComposerButton icon="🖼️" label="Screenshot" onClick={() => imageInputRef.current?.click()} />
+                    <ComposerButton icon="📓" label="Notebook" onClick={() => notebookInputRef.current?.click()} />
+                    <ComposerButton icon="🎙️" label="Voice" soon />
+                    <span className="ml-auto hidden text-[11px] text-slate-600 sm:inline">Ctrl + Enter to save</span>
+                    <button
+                      onClick={handleSave}
+                      disabled={saving || (!input.trim() && !pendingFile)}
+                      className="bg-brand ml-auto rounded-xl px-4 py-2 text-xs font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110 disabled:opacity-40 sm:ml-2"
+                    >
+                      {saving ? "Saving…" : pendingFile ? "Save with file" : "Save memory"}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
+          </main>
+
+          {/* ======================= RIGHT ======================= */}
+          <aside className="hidden w-72 shrink-0 flex-col gap-4 overflow-y-auto border-l border-white/5 p-4 lg:flex xl:w-80">
+            {mode === "topic" ? (
+              <Panel title="Related topics" subtitle="Tagged alongside this one">
+                <RelatedTopics history={topic!} onOpenTopic={openTopic} />
+              </Panel>
+            ) : mode === "answer" ? (
+              <Panel title="About this answer">
+                <AnswerInfo answer={answer!} />
+              </Panel>
+            ) : lastPreview ? (
+              <Panel title="What the AI understood" subtitle="From your last saved memory">
+                <PreviewPanel preview={lastPreview} />
+              </Panel>
+            ) : (
+              <Panel title="How it works">
+                <HowItWorks />
+              </Panel>
+            )}
+
+            <Panel title="Studio" subtitle="Create outputs from your memory">
+              <div className="grid grid-cols-2 gap-2">
+                <StudioCard icon="📝" label="Summary" />
+                <StudioCard icon="🗺️" label="Mind map" />
+                <StudioCard icon="📚" label="Learn more" />
+                <StudioCard icon="🗓️" label="Timeline" />
+              </div>
+            </Panel>
+
+            <Panel title="More">
+              <div className="space-y-1">
+                <MoreItem icon="🎯" label="Learning gaps" hint="Topics to explore" />
+                <MoreItem icon="🎤" label="Interview mode" hint="Practice on your real work" />
+                <MoreItem icon="🕸️" label="Knowledge map" hint="How topics connect" />
+              </div>
+            </Panel>
+          </aside>
+        </div>
+
+        {reviewing && (
+          <ReviewDialog attachment={reviewing} onClose={() => setReviewing(null)} onConfirmed={refreshAfterReview} />
+        )}
+      </div>
+    </ReviewContext.Provider>
+  );
+}
+
+/* ============================================================
+   Review dialog
+   ============================================================ */
+
+type ReviewDialogProps = {
+  attachment: AttachmentBrief;
+  onClose: () => void;
+  onConfirmed: () => void;
+};
+
+function ReviewDialog({ attachment, onClose, onConfirmed }: ReviewDialogProps) {
+  const [info, setInfo] = useState<AttachmentText | null>(null);
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getAttachmentText(attachment.id)
+      .then((t) => {
+        setInfo(t);
+        setText(t.text ?? "");
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Could not load text"));
+  }, [attachment.id]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function handleConfirm() {
+    setSaving(true);
+    setError(null);
+    try {
+      await confirmAttachmentText(attachment.id, text);
+      onConfirmed();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const markers = countMarkers(text);
+  const confidence = info?.extraction_confidence;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+      <div className="animate-fade-up grid max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-white/10 bg-[#0b0f1c] shadow-2xl md:grid-cols-2">
+        {/* original */}
+        <div className="flex min-h-0 flex-col border-b border-white/5 p-4 md:border-b-0 md:border-r">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">Original</p>
+            <ExternalLink href={attachmentUrl(attachment.id)} className="text-[11px] text-indigo-300 hover:text-indigo-200">
+              Open full size ↗
+            </ExternalLink>
           </div>
-        </main>
+          <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-xl bg-black/30">
+            <Picture
+              src={attachmentUrl(attachment.id)}
+              alt={attachment.original_filename}
+              className="max-h-[70vh] w-full object-contain"
+            />
+          </div>
+        </div>
 
-        {/* ======================= RIGHT ======================= */}
-        <aside className="hidden w-72 shrink-0 flex-col gap-4 overflow-y-auto border-l border-white/5 p-4 lg:flex xl:w-80">
-          {mode === "topic" ? (
-            <Panel title="Related topics" subtitle="Tagged alongside this one">
-              <RelatedTopics history={topic!} onOpenTopic={openTopic} />
-            </Panel>
-          ) : mode === "answer" ? (
-            <Panel title="About this answer">
-              <AnswerInfo answer={answer!} />
-            </Panel>
-          ) : lastPreview ? (
-            <Panel title="What the AI understood" subtitle="From your last saved memory">
-              <PreviewPanel preview={lastPreview} />
-            </Panel>
-          ) : (
-            <Panel title="How it works">
-              <HowItWorks />
-            </Panel>
-          )}
+        {/* transcription */}
+        <div className="flex min-h-0 flex-col p-5">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-indigo-300/70">Review transcription</p>
+          <h3 className="font-display mt-1 text-2xl text-white">What does this say?</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            {info?.extraction_method === "ocr"
+              ? `Read by OCR — average confidence ${confidence != null ? Math.round(confidence) : "?"}%.`
+              : "Text extracted from the file."}{" "}
+            {info?.text_confirmed ? "Previously confirmed by you." : "Not confirmed yet."}
+          </p>
 
-          <Panel title="Studio" subtitle="Create outputs from your memory">
-            <div className="grid grid-cols-2 gap-2">
-              <StudioCard icon="📝" label="Summary" />
-              <StudioCard icon="🗺️" label="Mind map" />
-              <StudioCard icon="📚" label="Learn more" />
-              <StudioCard icon="🗓️" label="Timeline" />
-            </div>
-          </Panel>
+          <div className="mt-4 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-[11px] leading-relaxed text-slate-400">
+            <span className="text-amber-300">[?word?]</span> = the machine wasn&apos;t sure ·{" "}
+            <span className="text-rose-300">[unreadable]</span> = it couldn&apos;t read it. Fix or delete them, then confirm.
+          </div>
 
-          <Panel title="More">
-            <div className="space-y-1">
-              <MoreItem icon="🎯" label="Learning gaps" hint="Topics to explore" />
-              <MoreItem icon="🎤" label="Interview mode" hint="Practice on your real work" />
-              <MoreItem icon="🕸️" label="Knowledge map" hint="How topics connect" />
-            </div>
-          </Panel>
-        </aside>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={14}
+            placeholder={info ? "No text was found in this image. Type what it says, or leave empty." : "Loading…"}
+            className="mt-3 min-h-[200px] w-full flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.03] p-3 font-mono text-[13px] leading-relaxed text-slate-100 outline-none focus:border-indigo-400/50"
+          />
+
+          <p className={`mt-2 text-[11px] ${markers > 0 ? "text-amber-300/90" : "text-emerald-300/80"}`}>
+            {markers > 0 ? `${markers} uncertain ${markers === 1 ? "mark" : "marks"} left` : "No uncertain marks left"}
+          </p>
+
+          {error && <p className="mt-2 text-xs text-rose-300">{error}</p>}
+
+          <p className="mt-3 text-[10px] leading-relaxed text-slate-600">
+            Nothing here is treated as what you wrote until you confirm it. The original photo is always kept.
+          </p>
+
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              onClick={onClose}
+              className="rounded-xl border border-white/10 px-4 py-2 text-xs text-slate-400 transition hover:text-slate-200"
+            >
+              Later
+            </button>
+            <button
+              onClick={handleConfirm}
+              disabled={saving || !info}
+              className="bg-brand rounded-xl px-4 py-2 text-xs font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110 disabled:opacity-40"
+            >
+              {saving ? "Saving…" : "Confirm transcription"}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -617,6 +814,13 @@ function FeedView({ memories, loading, filter, onOpenTopic, onExample }: FeedVie
   }
 
   if (memories.length === 0) {
+    if (filter === "review") {
+      return (
+        <div className="animate-fade-up rounded-2xl border border-emerald-400/15 bg-emerald-500/[0.04] p-8 text-center">
+          <p className="text-sm text-emerald-200/90">Nothing waiting for review. Every image&apos;s text is confirmed.</p>
+        </div>
+      );
+    }
     if (filter !== "all") {
       return (
         <div className="animate-fade-up rounded-2xl border border-white/[0.06] bg-white/[0.02] p-8 text-center">
@@ -870,7 +1074,7 @@ function HowItWorks() {
   const steps = [
     ["✍️", "Describe your work", "In your own words — no forms."],
     ["📎", "Attach evidence", "Paste a screenshot or drop a file. Originals are kept."],
-    ["🧩", "It gets organised", "Type, topics and uncertainty are extracted."],
+    ["📓", "Photograph your notebook", "Handwriting is read, and you confirm it."],
     ["🔎", "Ask anytime", "Answers come only from what you recorded."],
   ];
   return (
@@ -916,6 +1120,7 @@ function MemoryCard({ memory, onOpenTopic, showDate = false }: MemoryCardProps) 
 }
 
 function AttachmentList({ items }: { items: AttachmentBrief[] }) {
+  const review = useContext(ReviewContext);
   if (items.length === 0) return null;
   const images = items.filter((a) => a.content_type.startsWith("image/"));
   const files = items.filter((a) => !a.content_type.startsWith("image/"));
@@ -923,23 +1128,26 @@ function AttachmentList({ items }: { items: AttachmentBrief[] }) {
   return (
     <div className="mt-3 space-y-2">
       {images.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-3">
           {images.map((a) => (
-            <ExternalLink
-              key={a.id}
-              href={attachmentUrl(a.id)}
-              title={`${a.original_filename} — open original`}
-              className="group relative block h-24 w-36 overflow-hidden rounded-lg border border-white/10 bg-black/30"
-            >
-              <Picture
-                src={attachmentUrl(a.id)}
-                alt={a.original_filename}
-                className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
-              />
-              <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/80 to-transparent px-2 pb-1 pt-4 text-[10px] text-slate-200">
-                {a.original_filename}
-              </span>
-            </ExternalLink>
+            <div key={a.id} className="flex w-36 flex-col gap-1.5">
+              <ExternalLink
+                href={attachmentUrl(a.id)}
+                title={`${a.original_filename} — open original`}
+                className="group relative block h-24 w-36 overflow-hidden rounded-lg border border-white/10 bg-black/30"
+              >
+                <Picture
+                  src={attachmentUrl(a.id)}
+                  alt={a.original_filename}
+                  className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                />
+                <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/80 to-transparent px-2 pb-1 pt-4 text-[10px] text-slate-200">
+                  {a.kind === "notebook_photo" ? "📓 " : ""}
+                  {a.original_filename}
+                </span>
+              </ExternalLink>
+              <OcrBadge attachment={a} onReview={() => review(a)} />
+            </div>
           ))}
         </div>
       )}
@@ -956,6 +1164,39 @@ function AttachmentList({ items }: { items: AttachmentBrief[] }) {
         </ExternalLink>
       ))}
     </div>
+  );
+}
+
+type OcrBadgeProps = { attachment: AttachmentBrief; onReview: () => void };
+
+function OcrBadge({ attachment, onReview }: OcrBadgeProps) {
+  if (attachment.extraction_method !== "ocr") return null;
+
+  if (attachment.text_confirmed) {
+    return (
+      <button
+        onClick={onReview}
+        className="rounded-md bg-emerald-500/10 px-2 py-1 text-left text-[10px] text-emerald-300 ring-1 ring-inset ring-emerald-400/20 transition hover:bg-emerald-500/15"
+      >
+        ✓ Text confirmed
+      </button>
+    );
+  }
+
+  const conf = Math.round(attachment.extraction_confidence ?? 0);
+  const low = conf < REVIEW_THRESHOLD || attachment.kind === "notebook_photo";
+
+  return (
+    <button
+      onClick={onReview}
+      className={`rounded-md px-2 py-1 text-left text-[10px] ring-1 ring-inset transition ${
+        low
+          ? "bg-amber-500/10 text-amber-300 ring-amber-400/20 hover:bg-amber-500/15"
+          : "bg-white/[0.03] text-slate-400 ring-white/10 hover:text-slate-200"
+      }`}
+    >
+      {low ? "⚠ Review text" : "Review text"} · {conf}%
+    </button>
   );
 }
 
@@ -1235,7 +1476,16 @@ function filterLabel(f: Filter): string {
   if (f === "today") return "Today";
   if (f === "week") return "This week";
   if (f === "files") return "With files";
+  if (f === "review") return "Needs review";
   return meta(f.slice(5)).section;
+}
+
+function needsReview(m: Memory): boolean {
+  return (m.attachments ?? []).some((a) => a.extraction_method === "ocr" && !a.text_confirmed);
+}
+
+function countMarkers(text: string): number {
+  return (text.match(/\[\?[^\]]*\?\]|\[unreadable\]/g) ?? []).length;
 }
 
 function localISO(d: Date): string {

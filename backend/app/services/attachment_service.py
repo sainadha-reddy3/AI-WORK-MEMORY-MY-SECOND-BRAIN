@@ -314,3 +314,64 @@ def read_attachment(attachment: Attachment) -> bytes:
     if not storage.exists(attachment.storage_key):
         raise FileNotFoundError(attachment.storage_key)
     return storage.read(attachment.storage_key)
+
+# ------------------------------------------------------------------
+# Reviewing extracted text
+# ------------------------------------------------------------------
+
+
+def get_attachment_text(attachment: Attachment) -> dict:
+    return {
+        "id": attachment.id,
+        "original_filename": attachment.original_filename,
+        "kind": attachment.kind,
+        "content_type": attachment.content_type,
+        "extraction_method": attachment.extraction_method,
+        "extraction_confidence": attachment.extraction_confidence,
+        "text_confirmed": attachment.text_confirmed,
+        "text": attachment.extracted_text,
+    }
+
+
+def confirm_attachment_text(db: Session, attachment: Attachment, text: str) -> Attachment:
+    """
+    Save the user's reviewed version of a file's text.
+
+    From here on the text counts as confirmed by the user. The machine's
+    original confidence is kept for the record, and the evidence rows
+    are updated to say, in plain words, what happened.
+    """
+    text = (text or "").replace("\x00", "").strip()
+
+    if text and looks_like_secret(text):
+        raise AttachmentError(
+            "This text appears to contain a credential. It was not saved."
+        )
+
+    attachment.extracted_text = text or None
+    attachment.text_confirmed = True
+
+    how = (
+        "transcribed by OCR, then reviewed and confirmed by you"
+        if attachment.extraction_method == "ocr"
+        else "text reviewed and confirmed by you"
+    )
+    stamp = date.today().isoformat()
+
+    rows = db.execute(
+        select(Evidence).where(Evidence.attachment_id == attachment.id)
+    ).scalars().all()
+    for evidence in rows:
+        evidence.source_detail = f"Original file: {attachment.original_filename} — {how} ({stamp})"
+        evidence.excerpt = text[:EXCERPT_CHARS] if text else None
+
+    db.commit()
+
+    # The confirmed text is what search should see from now on.
+    if attachment.memory_id:
+        memory = db.get(Memory, attachment.memory_id)
+        if memory is not None:
+            embed_memory(db, memory)
+
+    db.refresh(attachment)
+    return attachment
