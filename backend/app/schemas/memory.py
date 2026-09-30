@@ -61,6 +61,13 @@ class AttachmentBrief(BaseModel):
     content_type: str
     size_bytes: int
 
+    # How any text was obtained (text | pdf | docx | ocr), how confident
+    # OCR was, and whether the user has reviewed it. Unconfirmed OCR is
+    # never presented as what the user wrote.
+    extraction_method: str | None = None
+    extraction_confidence: float | None = None
+    text_confirmed: bool = False
+
     class Config:
         from_attributes = True
 

@@ -6,10 +6,10 @@ Rules enforced here:
   * the original file is always kept, byte for byte
   * a file becomes EVIDENCE for its memory, not decoration
   * with no description, nothing about the file's content is invented
-  * credential files are refused — by name AND by content — before
-    anything reaches storage
-  * text read out of a file is stored as derived data, and the memory
-    is re-embedded so that text becomes searchable
+  * credential files are refused — by name AND by content (including
+    text read from screenshots) — before anything reaches storage
+  * text read from a file is stored as derived data, with how it was
+    obtained and how confident the machine was
 """
 
 import uuid
@@ -19,11 +19,12 @@ from pathlib import PurePath
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.storage import build_key, get_storage, sha256_of
 from app.models import Attachment, Evidence, Memory
 from app.schemas import EvidenceCreate, MemoryCapture, MemoryCreate
 from app.services.embedding_service import embed_memory
-from app.services.extraction import extract_text, looks_like_secret
+from app.services.extraction import Extraction, extract_any, looks_like_secret
 from app.services.memory_service import capture_memory, create_memory
 
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB
@@ -44,7 +45,6 @@ CODE_FILENAMES = {"dockerfile", "makefile", "jenkinsfile"}
 SECRET_FILENAMES = {".env", "id_rsa", "id_ed25519", "credentials.json", ".npmrc", ".pypirc"}
 SECRET_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".keystore"}
 
-# How each kind of file is recorded as evidence.
 EVIDENCE_SOURCE = {
     "screenshot": "screenshot",
     "image": "screenshot",
@@ -94,19 +94,24 @@ def classify(filename: str, content_type: str, requested: str | None) -> str:
     raise AttachmentError(f"Unsupported file type ({content_type or suffix or 'unknown'}).")
 
 
+def describe_extraction(filename: str, ex: Extraction) -> str:
+    """Plain-language provenance for the evidence row."""
+    detail = f"Original file: {filename}"
+    if ex.method == "ocr":
+        conf = f"{ex.confidence:.0f}%" if ex.confidence is not None else "unknown"
+        detail += f" — text read by OCR (average confidence {conf}), not verified"
+    elif ex.text:
+        detail += " — text extracted automatically from the file"
+    return detail
+
+
 def _store_file(
-    db: Session,
-    data: bytes,
-    filename: str,
-    content_type: str,
-    kind: str,
-    extracted: str | None,
+    db: Session, data: bytes, filename: str, content_type: str, kind: str, ex: Extraction
 ) -> Attachment:
     """Save the bytes (once per unique content) and create the record."""
     storage = get_storage()
     digest = sha256_of(data)
 
-    # Same bytes already stored? Reuse them rather than keeping a copy.
     existing = db.execute(
         select(Attachment).where(Attachment.sha256 == digest).limit(1)
     ).scalar_one_or_none()
@@ -125,7 +130,10 @@ def _store_file(
         sha256=digest,
         storage_backend=storage.name,
         storage_key=key,
-        extracted_text=extracted,
+        extracted_text=ex.text,
+        extraction_method=ex.method,
+        extraction_confidence=ex.confidence,
+        text_confirmed=False,
     )
     db.add(attachment)
     db.flush()
@@ -158,10 +166,10 @@ def upload_attachment(
     kind = classify(filename, content_type, kind)
     source_type = EVIDENCE_SOURCE[kind]
 
-    # Read the text BEFORE storing, so a file containing a credential
-    # is refused without ever touching storage.
-    extracted = extract_text(data, filename, content_type or "", kind)
-    if extracted and looks_like_secret(extracted):
+    # Read the text BEFORE storing, so a file (or screenshot) containing
+    # a credential is refused without ever touching storage.
+    ex = extract_any(data, filename, content_type or "", kind, settings.ocr_langs)
+    if ex.text and looks_like_secret(ex.text):
         raise AttachmentError(
             "This file appears to contain a credential (for example a "
             "private key, access token or service-account key). It was "
@@ -174,13 +182,11 @@ def upload_attachment(
         if existing_memory is None:
             raise AttachmentError("Memory not found.")
 
-    attachment = _store_file(db, data, filename, content_type, kind, extracted)
+    attachment = _store_file(db, data, filename, content_type, kind, ex)
     note = (note or "").strip()
 
-    file_detail = f"Original file: {filename}"
-    if extracted:
-        file_detail += " — text extracted automatically from the file"
-    file_excerpt = extracted[:EXCERPT_CHARS] if extracted else None
+    file_detail = describe_extraction(filename, ex)
+    file_excerpt = ex.text[:EXCERPT_CHARS] if ex.text else None
 
     if existing_memory is not None:
         memory = existing_memory
@@ -204,8 +210,6 @@ def upload_attachment(
             )
 
     elif note:
-        # The note becomes a normal AI-structured memory (with its own
-        # user_typed evidence); the file is added as a second source.
         memory, _ = capture_memory(db, MemoryCapture(text=note))
         db.add(
             Evidence(
@@ -218,7 +222,6 @@ def upload_attachment(
         )
 
     else:
-        # No description: record only that the upload happened.
         label = KIND_LABEL[kind]
         memory = create_memory(
             db,
@@ -252,8 +255,8 @@ def upload_attachment(
 
 def backfill_extraction(db: Session) -> dict:
     """
-    Extract text from attachments uploaded before extraction existed,
-    then re-embed the memories they belong to. Safe to run repeatedly.
+    Extract text from attachments that have none yet — including images,
+    now that OCR exists — then re-embed their memories. Safe to rerun.
     """
     pending = db.execute(
         select(Attachment).where(Attachment.extracted_text.is_(None))
@@ -270,9 +273,14 @@ def backfill_extraction(db: Session) -> dict:
             skipped += 1
             continue
 
-        text = extract_text(data, attachment.original_filename, attachment.content_type, attachment.kind)
-        if text:
-            attachment.extracted_text = text
+        ex = extract_any(
+            data, attachment.original_filename, attachment.content_type,
+            attachment.kind, settings.ocr_langs,
+        )
+        if ex.text:
+            attachment.extracted_text = ex.text
+            attachment.extraction_method = ex.method
+            attachment.extraction_confidence = ex.confidence
             extracted_count += 1
             if attachment.memory_id:
                 touched.add(attachment.memory_id)
@@ -301,12 +309,7 @@ def list_attachments(db: Session, *, kind: str | None = None, limit: int = 50) -
 
 
 def read_attachment(attachment: Attachment) -> bytes:
-    """
-    Return the original bytes.
-
-    Raises FileNotFoundError when storage has lost the file, so the
-    caller can say so plainly instead of serving something broken.
-    """
+    """Return the original bytes, or raise FileNotFoundError if storage lost it."""
     storage = get_storage()
     if not storage.exists(attachment.storage_key):
         raise FileNotFoundError(attachment.storage_key)

@@ -2,7 +2,7 @@
 Attachments — original files linked to memories.
 
 The file itself lives in storage; this row records what it is, where
-it is, and a fingerprint of its exact bytes.
+it is, a fingerprint of its exact bytes, and any text read from it.
 
 memory_id uses ON DELETE SET NULL: deleting a memory never deletes
 the original file behind it.
@@ -11,7 +11,7 @@ the original file behind it.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,9 +46,21 @@ class Attachment(Base):
     storage_backend: Mapped[str] = mapped_column(String(30), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
 
-    # Text pulled out of the file (Task 7.4, OCR in Phase 8).
-    # Always a derivative — the original file is the source of truth.
+    # Text read from the file. Always a derivative — the original file
+    # is the source of truth.
     extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # How the text was obtained: text | pdf | docx | ocr
+    extraction_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # OCR's average word confidence (0-100). Null for exact extraction.
+    extraction_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # False until the user has reviewed the text. Unconfirmed OCR is
+    # never presented as what the user wrote.
+    text_confirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

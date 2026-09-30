@@ -164,3 +164,30 @@ def ocr_image(data: bytes, langs: str = "eng") -> OcrResult:
         words=len(confidences),
         uncertain_words=uncertain,
     )
+# ------------------------------------------------------------------
+# One entry point for every kind of file
+# ------------------------------------------------------------------
+
+
+@dataclass
+class Extraction:
+    text: str | None
+    method: str | None       # "text" | "pdf" | "docx" | "ocr"
+    confidence: float | None  # only for OCR
+
+
+IMAGE_KINDS = {"screenshot", "image", "notebook_photo"}
+
+
+def extract_any(
+    data: bytes, filename: str, content_type: str, kind: str, ocr_langs: str = "eng"
+) -> Extraction:
+    """Extract text from any supported file, recording how it was obtained."""
+    if kind in IMAGE_KINDS or (content_type or "").startswith("image/"):
+        result = ocr_image(data, langs=ocr_langs)
+        return Extraction(result.text, "ocr" if result.text else None, result.confidence)
+
+    text = extract_text(data, filename, content_type or "", kind)
+    suffix = PurePath(filename.lower()).suffix
+    method = "pdf" if suffix == ".pdf" else "docx" if suffix == ".docx" else "text"
+    return Extraction(text, method if text else None, None)

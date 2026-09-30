@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # gitignored — personal files never enter Git.
     storage_dir: str = "/app/storage"
 
+    # Tesseract languages for OCR. "eng" is fastest and most accurate
+    # for screenshots; use "eng+tel+hin" for printed Telugu/Hindi.
+    ocr_langs: str = "eng"
+
     class Config:
         case_sensitive = False
 
