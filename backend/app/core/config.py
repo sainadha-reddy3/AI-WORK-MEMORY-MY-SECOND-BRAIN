@@ -15,6 +15,10 @@ class Settings(BaseSettings):
 
     environment: str = "development"
 
+    # Your local timezone. Decides what "today" and "yesterday" mean,
+    # and which day a memory is dated. The server clock runs on UTC.
+    timezone: str = "Asia/Kolkata"
+
     # --- AI provider ------------------------------------------
     # Which provider to use: "local", "ollama" or "mock".
     # Kept in config so switching providers never means a code change.
@@ -40,7 +44,7 @@ class Settings(BaseSettings):
     # Whisper model for speech-to-text. "base" is fast on a small CPU;
     # "small" is noticeably better for Telugu/Hindi but ~3x slower
     # (and must also be pre-downloaded in the Dockerfile).
-    whisper_model: str = "base"
+    whisper_model: str = "small"
 
     class Config:
         case_sensitive = False

@@ -26,7 +26,7 @@ RUN python -c "from sentence_transformers import SentenceTransformer; \
 COPY requirements-voice.txt .
 RUN pip install --no-cache-dir -r requirements-voice.txt
 RUN python -c "from faster_whisper import WhisperModel; \
-    WhisperModel('base', device='cpu', compute_type='int8')"
+    WhisperModel('small', device='cpu', compute_type='int8')"
 
 # ---- Layer 2: application dependencies (change often) ----
 COPY requirements.txt .

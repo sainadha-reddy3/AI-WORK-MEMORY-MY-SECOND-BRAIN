@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.ai import get_provider
 from app.models import Evidence, Memory
 from app.schemas import EvidenceCreate, MemoryCapture, MemoryCreate
+from app.services.dates import local_today
 
 
 class MemoryValidationError(ValueError):
@@ -96,13 +97,12 @@ def list_memories(
     """
     List memories, newest work first.
 
-    The filters here are the foundation of the left panel
-    (Today / This Week) and of topic-centric history in Phase 6.
+    The filters here back the left panel (Today / This Week), topic
+    history, and date-filtered questions ("what did I do yesterday?").
     """
     stmt = select(Memory).options(selectinload(Memory.evidence))
 
     if topic:
-        # Postgres array containment: does topics include this tag?
         stmt = stmt.where(Memory.topics.any(topic.strip().lower()))
 
     if memory_type:
@@ -147,7 +147,8 @@ def capture_memory(db: Session, data: MemoryCapture) -> tuple[Memory, dict]:
     topics = data.topics if data.topics is not None else structured.topics
 
     memory_in = MemoryCreate(
-        occurred_on=data.occurred_on or date.today(),
+        # The user's local day — not the server's UTC clock.
+        occurred_on=data.occurred_on or local_today(),
         title=structured.title,
         # The user's words, not the model's rewrite.
         content=data.text.strip(),

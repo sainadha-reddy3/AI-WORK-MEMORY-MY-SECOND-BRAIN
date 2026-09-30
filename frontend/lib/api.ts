@@ -73,6 +73,12 @@ export type CaptureResult = {
   preview: CapturePreview;
 };
 
+export type DateFilter = {
+  label: string;
+  since: string;
+  until: string;
+};
+
 export type AskResponse = {
   question: string;
   has_recorded_memory: boolean;
@@ -81,6 +87,7 @@ export type AskResponse = {
   sources: Memory[];
   provider: string;
   provider_available: boolean;
+  date_filter: DateFilter | null;
 };
 
 export type TopicSummary = {
@@ -125,6 +132,16 @@ export type AttachmentText = {
   extraction_confidence: number | null;
   text_confirmed: boolean;
   text: string | null;
+};
+
+export type Transcript = {
+  text: string;
+  language: string;
+  language_probability: number;
+  duration: number;
+  confidence: number | null;
+  unclear_segments: number;
+  model: string;
 };
 
 /* ---------- helpers ---------- */
@@ -236,17 +253,8 @@ export async function confirmAttachmentText(id: string, text: string): Promise<A
   if (!res.ok) throw new Error(await errorMessage(res, "Failed to save text"));
   return res.json();
 }
-/* ---------- voice ---------- */
 
-export type Transcript = {
-  text: string;
-  language: string;
-  language_probability: number;
-  duration: number;
-  confidence: number | null;
-  unclear_segments: number;
-  model: string;
-};
+/* ---------- voice ---------- */
 
 // Transcribe a recording locally with Whisper. Nothing is stored —
 // the recording only becomes a memory when the user saves it.

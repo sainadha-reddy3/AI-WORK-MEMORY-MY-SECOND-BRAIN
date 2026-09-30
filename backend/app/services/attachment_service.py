@@ -14,7 +14,6 @@ Rules enforced here:
 """
 
 import uuid
-from datetime import date
 from pathlib import PurePath
 
 from sqlalchemy import select
@@ -24,6 +23,7 @@ from app.core.config import settings
 from app.core.storage import build_key, get_storage, sha256_of
 from app.models import Attachment, Evidence, Memory
 from app.schemas import EvidenceCreate, MemoryCapture, MemoryCreate
+from app.services.dates import local_today
 from app.services.embedding_service import embed_memory
 from app.services.extraction import Extraction, extract_any, looks_like_secret
 from app.services.memory_service import capture_memory, create_memory
@@ -247,7 +247,8 @@ def upload_attachment(
         memory = create_memory(
             db,
             MemoryCreate(
-                occurred_on=date.today(),
+                # The user's local day — not the server's UTC clock.
+                occurred_on=local_today(),
                 title=f"{label}: {filename}"[:300],
                 content=f"Uploaded {label.lower()} '{filename}' with no description.",
                 memory_type="note",
@@ -379,7 +380,7 @@ def confirm_attachment_text(db: Session, attachment: Attachment, text: str) -> A
         if attachment.extraction_method == "ocr"
         else "text reviewed and confirmed by you"
     )
-    stamp = date.today().isoformat()
+    stamp = local_today().isoformat()
 
     rows = db.execute(
         select(Evidence).where(Evidence.attachment_id == attachment.id)

@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  experimental: {
+    // Voice transcription on a small CPU can take longer than the
+    // default 30 seconds; don't let the proxy give up first.
+    proxyTimeout: 180_000,
+  },
   async rewrites() {
     return [
       {

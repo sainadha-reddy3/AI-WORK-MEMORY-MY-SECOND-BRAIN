@@ -19,6 +19,9 @@ class Transcript(BaseModel):
     duration: float
     confidence: float | None
     unclear_segments: int
+    # True when the output is in the wrong writing system for the
+    # language requested (e.g. Tamil script when Telugu was asked for).
+    script_mismatch: bool = False
     model: str
 
 

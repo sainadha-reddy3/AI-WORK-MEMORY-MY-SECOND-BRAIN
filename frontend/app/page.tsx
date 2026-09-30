@@ -110,6 +110,9 @@ const EXAMPLES = [
 
 type Filter = "all" | "today" | "week" | "files" | "review" | `type:${string}`;
 
+// Where a voice recording goes: into a new memory, or into the Ask bar.
+type RecordTarget = "memory" | "question";
+
 // Lets any attachment thumbnail open the review panel without passing
 // a callback down through every component in between.
 type ReviewFn = (a: AttachmentBrief) => void;
@@ -139,19 +142,22 @@ export default function Home() {
   const [reviewing, setReviewing] = useState<AttachmentBrief | null>(null);
 
   // voice
-  const [recording, setRecording] = useState(false);
+  const [recordTarget, setRecordTarget] = useState<RecordTarget | null>(null);
   const [recordSeconds, setRecordSeconds] = useState(0);
-  const [transcribing, setTranscribing] = useState(false);
+  const [transcribing, setTranscribing] = useState<RecordTarget | null>(null);
   const [lastTranscript, setLastTranscript] = useState<Transcript | null>(null);
   const [voiceLang, setVoiceLang] = useState("auto");
 
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const questionRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const notebookInputRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
+
+  const recording = recordTarget !== null;
 
   useEffect(() => {
     listMemories()
@@ -173,11 +179,12 @@ export default function Home() {
     return () => URL.revokeObjectURL(url);
   }, [pendingFile]);
 
-  // Auto-stop long recordings, and clean up if the page closes mid-recording.
+  // Auto-stop long recordings.
   useEffect(() => {
     if (recording && recordSeconds >= MAX_RECORD_SECONDS) stopRecording();
   }, [recording, recordSeconds]);
 
+  // Release the microphone if the page closes mid-recording.
   useEffect(() => {
     return () => {
       if (timerRef.current) window.clearInterval(timerRef.current);
@@ -242,7 +249,7 @@ export default function Home() {
 
   /* ---------- voice ---------- */
 
-  async function startRecording() {
+  async function startRecording(target: RecordTarget) {
     setError(null);
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setError("This browser can't record audio.");
@@ -258,12 +265,12 @@ export default function Home() {
       recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
-        handleRecorded(blob);
+        handleRecorded(blob, target);
       };
       recorderRef.current = recorder;
       recorder.start();
       setRecordSeconds(0);
-      setRecording(true);
+      setRecordTarget(target);
       timerRef.current = window.setInterval(() => setRecordSeconds((s) => s + 1), 1000);
     } catch {
       setError("Microphone access was blocked. Allow it in your browser's address bar and try again.");
@@ -275,18 +282,27 @@ export default function Home() {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
-    setRecording(false);
+    setRecordTarget(null);
     if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
   }
 
-  async function handleRecorded(blob: Blob) {
+  async function handleRecorded(blob: Blob, target: RecordTarget) {
     if (blob.size === 0) {
       setError("Nothing was recorded.");
       return;
     }
-    setTranscribing(true);
+    setTranscribing(target);
     try {
       const transcript = await transcribeAudio(blob, voiceLang);
+
+      if (target === "question") {
+        // A spoken question is not stored — it just fills the Ask bar,
+        // where it can be checked and corrected before asking.
+        setQuestion(transcript.text);
+        questionRef.current?.focus();
+        return;
+      }
+
       const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
       const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: blob.type || "audio/webm" });
       pickFile(file, "audio");
@@ -296,7 +312,7 @@ export default function Home() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Transcription failed");
     } finally {
-      setTranscribing(false);
+      setTranscribing(null);
     }
   }
 
@@ -392,13 +408,16 @@ export default function Home() {
   const transcriptShaky =
     !!lastTranscript && (lastTranscript.unclear_segments > 0 || (lastTranscript.confidence ?? 100) < 60);
 
+  const recordingQuestion = recordTarget === "question";
+  const recordingMemory = recordTarget === "memory";
+
   return (
     <ReviewContext.Provider value={(a) => setReviewing(a)}>
       <div className="flex h-screen flex-col text-slate-200">
         {/* ======================= HEADER ======================= */}
         <header className="flex h-16 shrink-0 items-center gap-4 border-b border-white/5 bg-[#070a14]/60 px-5 backdrop-blur-xl">
           <button onClick={() => showFeed("all")} className="flex shrink-0 items-center gap-3">
-            <MemoryLogo active={asking || saving || transcribing || !!openingTopic} />
+            <MemoryLogo active={asking || saving || transcribing !== null || !!openingTopic} />
             <div className="hidden text-left sm:block">
               <h1 className="text-[15px] font-semibold tracking-tight text-white">My Work Memory</h1>
               <p className="text-[11px] text-slate-500">Remember. Learn. Grow.</p>
@@ -409,16 +428,42 @@ export default function Home() {
             <div className="group relative flex items-center">
               <SearchIcon className="pointer-events-none absolute left-4 h-4 w-4 text-slate-500 transition group-focus-within:text-indigo-300" />
               <input
+                ref={questionRef}
                 type="text"
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAsk()}
-                placeholder="Ask your memory — e.g. How did I fix the ArgoCD sync issue?"
-                className="h-11 w-full rounded-full border border-white/10 bg-white/[0.03] pl-11 pr-28 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-indigo-400/50 focus:bg-white/[0.05] focus:ring-4 focus:ring-indigo-500/10"
+                placeholder={
+                  recordingQuestion
+                    ? "Listening… click the mic again when you're done."
+                    : transcribing === "question"
+                    ? "Transcribing your question…"
+                    : "Ask your memory — e.g. What did I do with ArgoCD last week?"
+                }
+                className="h-11 w-full rounded-full border border-white/10 bg-white/[0.03] pl-11 pr-36 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-indigo-400/50 focus:bg-white/[0.05] focus:ring-4 focus:ring-indigo-500/10"
               />
               <button
+                onClick={() => (recordingQuestion ? stopRecording() : startRecording("question"))}
+                disabled={recordingMemory || transcribing !== null}
+                title={recordingQuestion ? "Stop" : "Ask by voice"}
+                className={`absolute right-[84px] flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs transition disabled:opacity-40 ${
+                  recordingQuestion
+                    ? "bg-rose-500/15 text-rose-200 ring-1 ring-inset ring-rose-400/30"
+                    : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200"
+                }`}
+              >
+                {recordingQuestion ? (
+                  <>
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" />
+                    {formatDuration(recordSeconds)}
+                  </>
+                ) : (
+                  <span>🎙️</span>
+                )}
+              </button>
+              <button
                 onClick={handleAsk}
-                disabled={asking || !question.trim()}
+                disabled={asking || recording || !question.trim()}
                 className="bg-brand absolute right-1.5 h-8 rounded-full px-4 text-xs font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110 disabled:opacity-40"
               >
                 {asking ? "Thinking…" : "Ask"}
@@ -679,7 +724,7 @@ export default function Home() {
 
                   {transcriptShaky && (
                     <p className="mb-2 rounded-lg bg-amber-500/[0.06] px-3 py-1.5 text-[11px] text-amber-200/90">
-                      Some parts were hard to hear and are marked [?like this?]. Please check the text before saving.
+                      Some parts were hard to hear and may be wrong. Please check the text before saving.
                     </p>
                   )}
 
@@ -703,7 +748,7 @@ export default function Home() {
                       }
                     }}
                     placeholder={
-                      recording
+                      recordingMemory
                         ? "Listening… click Stop when you're done."
                         : pendingFile
                         ? "Describe this file (optional) — e.g. K9s showing the pod in CrashLoopBackOff"
@@ -717,29 +762,33 @@ export default function Home() {
                     <ComposerButton icon="📓" label="Notebook" onClick={() => notebookInputRef.current?.click()} />
 
                     <button
-                      onClick={recording ? stopRecording : startRecording}
-                      disabled={transcribing || saving}
-                      title={recording ? "Stop recording" : "Record a voice note"}
+                      onClick={() => (recordingMemory ? stopRecording() : startRecording("memory"))}
+                      disabled={recordingQuestion || transcribing !== null || saving}
+                      title={recordingMemory ? "Stop recording" : "Record a voice note"}
                       className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition disabled:opacity-40 ${
-                        recording
+                        recordingMemory
                           ? "bg-rose-500/15 text-rose-200 ring-1 ring-inset ring-rose-400/30"
                           : "text-slate-400 hover:bg-white/[0.05] hover:text-slate-200"
                       }`}
                     >
-                      {recording ? (
+                      {recordingMemory ? (
                         <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" />
                       ) : (
                         <span>🎙️</span>
                       )}
                       <span>
-                        {transcribing ? "Transcribing…" : recording ? `Stop ${formatDuration(recordSeconds)}` : "Voice"}
+                        {transcribing === "memory"
+                          ? "Transcribing…"
+                          : recordingMemory
+                          ? `Stop ${formatDuration(recordSeconds)}`
+                          : "Voice"}
                       </span>
                     </button>
                     <select
                       value={voiceLang}
                       onChange={(e) => setVoiceLang(e.target.value)}
-                      disabled={recording || transcribing}
-                      title="Language you'll speak"
+                      disabled={recording || transcribing !== null}
+                      title="Language you'll speak (for voice notes and voice questions)"
                       className="rounded-md border border-white/10 bg-[#0b0f1c] px-1.5 py-1 text-[11px] text-slate-400 outline-none disabled:opacity-40"
                     >
                       <option value="auto">Auto</option>
@@ -751,7 +800,7 @@ export default function Home() {
                     <span className="ml-auto hidden text-[11px] text-slate-600 lg:inline">Ctrl + Enter to save</span>
                     <button
                       onClick={handleSave}
-                      disabled={saving || recording || transcribing || (!input.trim() && !pendingFile)}
+                      disabled={saving || recording || transcribing !== null || (!input.trim() && !pendingFile)}
                       className="bg-brand ml-auto rounded-xl px-4 py-2 text-xs font-medium text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110 disabled:opacity-40 lg:ml-2"
                     >
                       {saving ? "Saving…" : pendingIsAudio ? "Save voice note" : pendingFile ? "Save with file" : "Save memory"}
@@ -1024,6 +1073,12 @@ type AnswerViewProps = {
 function AnswerView({ answer, onOpenTopic }: AnswerViewProps) {
   return (
     <div className="animate-fade-up space-y-5">
+      {answer.date_filter && (
+        <p className="inline-flex items-center gap-2 rounded-full border border-indigo-400/20 bg-indigo-500/[0.08] px-3 py-1 text-xs text-indigo-200">
+          📅 Only memories from {answer.date_filter.label}
+        </p>
+      )}
+
       {answer.has_recorded_memory ? (
         <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-6">
           <p className="mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-emerald-300/80">
@@ -1176,10 +1231,13 @@ function AnswerInfo({ answer }: { answer: AskResponse }) {
     <div className="space-y-3 text-xs">
       <InfoRow label="Recorded memory found" value={answer.has_recorded_memory ? "Yes" : "No"} />
       <InfoRow label="Sources used" value={String(answer.sources.length)} />
+      {answer.date_filter && (
+        <InfoRow label="Date range" value={`${shortDate(answer.date_filter.since)} – ${shortDate(answer.date_filter.until)}`} />
+      )}
       <InfoRow label="Provider" value={`${answer.provider}${answer.provider_available ? "" : " (rules)"}`} />
       <p className="border-t border-white/5 pt-3 text-[11px] leading-relaxed text-slate-500">
         Answers use only memories you recorded. General knowledge is always labelled separately, and never
-        presented as your experience.
+        presented as your experience. A date range is never silently widened.
       </p>
     </div>
   );
@@ -1239,7 +1297,7 @@ function HowItWorks() {
     ["✍️", "Describe your work", "Type or speak — no forms."],
     ["📎", "Attach evidence", "Paste a screenshot or drop a file. Originals are kept."],
     ["📓", "Photograph your notebook", "Handwriting is read, and you confirm it."],
-    ["🔎", "Ask anytime", "Answers come only from what you recorded."],
+    ["🔎", "Ask anytime", "By text or voice — try “yesterday” or “last week”."],
   ];
   return (
     <ol className="space-y-3">
@@ -1560,9 +1618,9 @@ function ComposerButton({ icon, label, onClick, soon = false }: ComposerButtonPr
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex items-center justify-between gap-3">
       <span className="text-slate-500">{label}</span>
-      <span className="text-slate-200">{value}</span>
+      <span className="text-right text-slate-200">{value}</span>
     </div>
   );
 }

@@ -2,6 +2,8 @@
 AI Work Memory — backend entry point.
 """
 
+import threading
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -36,6 +38,32 @@ app.include_router(ask_router)
 app.include_router(topics_router)
 app.include_router(attachments_router)
 app.include_router(voice_router)
+
+
+@app.on_event("startup")
+def warm_models() -> None:
+    """
+    Load the heavy models in the background as soon as the server starts,
+    so the first voice note or search doesn't wait for them. Runs in a
+    thread so startup itself isn't delayed; failures are harmless — the
+    model simply loads on first use instead.
+    """
+
+    def _warm() -> None:
+        try:
+            from app.services.voice_service import _model
+
+            _model()
+        except Exception:
+            pass
+        try:
+            from app.ai import get_provider
+
+            get_provider().embed("warm up")
+        except Exception:
+            pass
+
+    threading.Thread(target=_warm, daemon=True).start()
 
 
 @app.get("/")
