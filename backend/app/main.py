@@ -11,6 +11,7 @@ from app.api.ask import router as ask_router
 from app.api.attachments import router as attachments_router
 from app.api.memories import router as memories_router
 from app.api.topics import router as topics_router
+from app.api.voice import router as voice_router
 from app.db.session import get_db
 
 app = FastAPI(
@@ -34,6 +35,7 @@ app.include_router(memories_router)
 app.include_router(ask_router)
 app.include_router(topics_router)
 app.include_router(attachments_router)
+app.include_router(voice_router)
 
 
 @app.get("/")
@@ -41,7 +43,7 @@ def read_root():
     return {
         "app": "AI Work Memory — My Second Brain",
         "status": "running",
-        "phase": 7,
+        "phase": 9,
     }
 
 

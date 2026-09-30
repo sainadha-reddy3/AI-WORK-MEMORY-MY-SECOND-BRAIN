@@ -26,14 +26,21 @@ class Settings(BaseSettings):
     ollama_embed_model: str = "nomic-embed-text"
 
     # --- File storage -----------------------------------------
-    # Where original files (screenshots, documents, notebook photos)
-    # are kept. Mounted from ./storage on the host, which is
-    # gitignored — personal files never enter Git.
+    # Where original files (screenshots, documents, notebook photos,
+    # voice recordings) are kept. Mounted from ./storage on the host,
+    # which is gitignored — personal files never enter Git.
     storage_dir: str = "/app/storage"
 
-    # Tesseract languages for OCR. "eng" is fastest and most accurate
-    # for screenshots; use "eng+tel+hin" for printed Telugu/Hindi.
+    # --- OCR --------------------------------------------------
+    # Tesseract languages. "eng" is fastest and most accurate for
+    # screenshots; use "eng+tel+hin" for printed Telugu/Hindi.
     ocr_langs: str = "eng"
+
+    # --- Voice ------------------------------------------------
+    # Whisper model for speech-to-text. "base" is fast on a small CPU;
+    # "small" is noticeably better for Telugu/Hindi but ~3x slower
+    # (and must also be pre-downloaded in the Dockerfile).
+    whisper_model: str = "base"
 
     class Config:
         case_sensitive = False
