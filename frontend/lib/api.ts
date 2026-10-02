@@ -141,6 +141,10 @@ export type Transcript = {
   duration: number;
   confidence: number | null;
   unclear_segments: number;
+  // True when the output was in an unrelated writing system.
+  script_mismatch: boolean;
+  // e.g. "devanagari→telugu" when converted letter by letter.
+  script_converted: string | null;
   model: string;
 };
 

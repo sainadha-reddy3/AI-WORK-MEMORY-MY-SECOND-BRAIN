@@ -407,6 +407,8 @@ export default function Home() {
   const pendingIsAudio = !!pendingFile && pendingFile.type.startsWith("audio/");
   const transcriptShaky =
     !!lastTranscript && (lastTranscript.unclear_segments > 0 || (lastTranscript.confidence ?? 100) < 60);
+  const scriptFrom = lastTranscript?.script_converted?.split("→")[0] ?? null;
+  const scriptTo = lastTranscript?.script_converted?.split("→")[1] ?? null;
 
   const recordingQuestion = recordTarget === "question";
   const recordingMemory = recordTarget === "memory";
@@ -720,6 +722,13 @@ export default function Home() {
                         ✕
                       </button>
                     </div>
+                  )}
+
+                  {scriptFrom && scriptTo && (
+                    <p className="mb-2 rounded-lg bg-indigo-500/[0.08] px-3 py-1.5 text-[11px] text-indigo-200">
+                      Whisper wrote your speech in {scriptFrom} script, so it was converted to {scriptTo} letter by
+                      letter. Check the spelling before saving.
+                    </p>
                   )}
 
                   {transcriptShaky && (
@@ -1253,6 +1262,10 @@ function TranscriptInfo({ transcript }: { transcript: Transcript }) {
       <InfoRow label="Length" value={formatDuration(Math.round(transcript.duration))} />
       <InfoRow label="Confidence" value={transcript.confidence != null ? `${Math.round(transcript.confidence)}%` : "—"} />
       <InfoRow label="Unclear parts" value={String(transcript.unclear_segments)} />
+      {transcript.script_converted && (
+        <InfoRow label="Script" value={`Converted ${transcript.script_converted}`} />
+      )}
+      {transcript.script_mismatch && <InfoRow label="Script" value="Wrong script — check carefully" />}
       <InfoRow label="Model" value={`Whisper ${transcript.model}`} />
       <p className="border-t border-white/5 pt-3 text-[11px] leading-relaxed text-slate-500">
         Transcribed locally — your audio never left this machine. Read the text in the box and fix anything

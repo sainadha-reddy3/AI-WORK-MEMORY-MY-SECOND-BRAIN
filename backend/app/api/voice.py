@@ -22,7 +22,8 @@ class Transcript(BaseModel):
     # True when the output is in the wrong writing system for the
     # language requested (e.g. Tamil script when Telugu was asked for).
     script_mismatch: bool = False
-    model: str
+    # e.g. "devanagari→telugu" when the text was converted letter by letter.
+    script_converted: str | None = None
 
 
 @router.post("/transcribe", response_model=Transcript)
