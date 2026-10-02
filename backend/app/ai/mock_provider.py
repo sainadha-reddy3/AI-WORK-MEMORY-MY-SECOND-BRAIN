@@ -96,7 +96,7 @@ class MockProvider(AIProvider):
             memory_type=memory_type,
             confidence=confidence,
             topics=topics,
-            language="en",
+            language=detect_language(text),
             uncertainty_markers=markers,
         )
 

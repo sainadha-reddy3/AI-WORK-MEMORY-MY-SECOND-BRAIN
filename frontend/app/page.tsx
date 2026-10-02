@@ -1342,7 +1342,8 @@ function MemoryCard({ memory, onOpenTopic, showDate = false }: MemoryCardProps) 
     <article className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5 transition hover:border-white/10 hover:bg-white/[0.035]">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <TypeBadge type={memory.memory_type} />
-        {memory.confidence === "uncertain" && <UncertainBadge />}
+        {memory.language !== "en" && <LanguageBadge code={memory.language} />}
+        {memory.language !== "en" && <LanguageBadge code={memory.language} />}
         {showDate && <span className="text-[11px] text-slate-500">{shortDate(memory.occurred_on)}</span>}
         <span className="ml-auto text-[11px] text-slate-600">{sourceLabel(memory)}</span>
       </div>
@@ -1508,6 +1509,16 @@ function UncertainBadge() {
   return (
     <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300 ring-1 ring-inset ring-amber-400/20">
       ? Unconfirmed
+    </span>
+  );
+}
+
+const LANGUAGE_LABELS: Record<string, string> = { te: "తెలుగు", hi: "हिंदी", mixed: "Mixed" };
+
+function LanguageBadge({ code }: { code: string }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-teal-500/10 px-2 py-0.5 text-[10px] font-medium text-teal-300 ring-1 ring-inset ring-teal-400/20">
+      {LANGUAGE_LABELS[code] ?? code}
     </span>
   );
 }

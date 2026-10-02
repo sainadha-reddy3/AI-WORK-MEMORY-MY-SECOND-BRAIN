@@ -19,6 +19,7 @@ import httpx
 from app.ai.base import AIProvider, MemoryAnswer, StructuredMemory
 from app.ai.mock_provider import MockProvider
 from app.core.config import settings
+from app.core.language import detect_language
 
 STRUCTURE_PROMPT = """You extract structured data from a person's \
 description of their work.
