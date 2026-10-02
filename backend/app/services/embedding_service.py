@@ -14,17 +14,24 @@ from app.ai import get_provider
 from app.models import EMBEDDING_DIM, Memory, MemoryEmbedding
 
 # How much text from each attached file goes into the embedding. The
-# model only reads roughly the first 250 words of its input anyway;
+# model only reads the first few hundred words of its input anyway;
 # keyword search still covers the full extracted text.
 ATTACHMENT_TEXT_CHARS = 1500
 
 
+def embedding_key(provider) -> str:
+    """
+    Which model a vector came from. Vectors from different models live
+    in different spaces and must never be compared with each other.
+    """
+    return getattr(provider, "embedding_id", None) or provider.name
+
+
 def _build_source_text(memory: Memory) -> str:
     """
-    The text we actually embed.
-
-    Title, topics, content — plus text read from attached files, so a
-    question about what's INSIDE a file can find the memory it belongs to.
+    The text we actually embed: title, topics, content — plus text read
+    from attached files, so a question about what's INSIDE a file can
+    find the memory it belongs to.
     """
     parts = [memory.title]
     if memory.topics:
@@ -42,12 +49,7 @@ def _build_source_text(memory: Memory) -> str:
 
 
 def _fit_dimensions(vector: list[float]) -> list[float]:
-    """
-    Force a vector to the column's dimension.
-
-    Needed only for providers that return a different size (the mock).
-    A real model returns exactly EMBEDDING_DIM and this is a no-op.
-    """
+    """Force a vector to the column's dimension (only the mock needs this)."""
     if len(vector) == EMBEDDING_DIM:
         return vector
     if len(vector) > EMBEDDING_DIM:
@@ -63,6 +65,7 @@ def embed_memory(db: Session, memory: Memory) -> MemoryEmbedding | None:
     not prevent a memory from being saved.
     """
     provider = get_provider()
+    key = embedding_key(provider)
     source_text = _build_source_text(memory)
 
     try:
@@ -78,7 +81,7 @@ def embed_memory(db: Session, memory: Memory) -> MemoryEmbedding | None:
     existing = db.execute(
         select(MemoryEmbedding).where(
             MemoryEmbedding.memory_id == memory.id,
-            MemoryEmbedding.model == provider.name,
+            MemoryEmbedding.model == key,
         )
     ).scalars().all()
     for row in existing:
@@ -86,7 +89,7 @@ def embed_memory(db: Session, memory: Memory) -> MemoryEmbedding | None:
 
     embedding = MemoryEmbedding(
         memory_id=memory.id,
-        model=provider.name,
+        model=key,
         vector=_fit_dimensions(raw_vector),
         source_text=source_text,
     )
@@ -104,10 +107,11 @@ def backfill_embeddings(db: Session, *, limit: int = 500) -> dict:
     or after any period when the provider was unreachable.
     """
     provider = get_provider()
+    key = embedding_key(provider)
 
     embedded_ids = set(
         db.execute(
-            select(MemoryEmbedding.memory_id).where(MemoryEmbedding.model == provider.name)
+            select(MemoryEmbedding.memory_id).where(MemoryEmbedding.model == key)
         ).scalars().all()
     )
 
@@ -123,7 +127,7 @@ def backfill_embeddings(db: Session, *, limit: int = 500) -> dict:
             failed += 1
 
     return {
-        "provider": provider.name,
+        "model": key,
         "already_embedded": len(embedded_ids),
         "attempted": len(pending),
         "succeeded": succeeded,
@@ -134,14 +138,15 @@ def backfill_embeddings(db: Session, *, limit: int = 500) -> dict:
 def embedding_status(db: Session) -> dict:
     """How much of the memory store is currently searchable."""
     provider = get_provider()
+    key = embedding_key(provider)
     total = len(db.execute(select(Memory.id)).scalars().all())
     embedded = len(
         db.execute(
-            select(MemoryEmbedding.memory_id).where(MemoryEmbedding.model == provider.name)
+            select(MemoryEmbedding.memory_id).where(MemoryEmbedding.model == key)
         ).scalars().all()
     )
     return {
-        "provider": provider.name,
+        "model": key,
         "provider_available": provider.is_available(),
         "total_memories": total,
         "embedded": embedded,

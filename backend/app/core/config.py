@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.2:3b"
     ollama_embed_model: str = "nomic-embed-text"
 
+    # --- Embeddings & search ----------------------------------
+    # Multilingual: understands Telugu and Hindi as well as English,
+    # so a question in one language can find a memory in another.
+    # Must also be pre-downloaded in the Dockerfile.
+    embedding_model: str = "intfloat/multilingual-e5-small"
+
+    # Below this similarity a semantic match is treated as noise.
+    # Depends on the embedding model — re-tune it whenever the model
+    # changes. A wrong memory is worse than no memory.
+    semantic_threshold: float = 0.82
     # --- File storage -----------------------------------------
     # Where original files (screenshots, documents, notebook photos,
     # voice recordings) are kept. Mounted from ./storage on the host,
@@ -41,9 +51,9 @@ class Settings(BaseSettings):
     ocr_langs: str = "eng"
 
     # --- Voice ------------------------------------------------
-    # Whisper model for speech-to-text. "base" is fast on a small CPU;
-    # "small" is noticeably better for Telugu/Hindi but ~3x slower
-    # (and must also be pre-downloaded in the Dockerfile).
+    # Whisper model for speech-to-text. "small" handles Telugu and
+    # Hindi far better than "base". Must also be pre-downloaded in
+    # the Dockerfile.
     whisper_model: str = "small"
 
     class Config:

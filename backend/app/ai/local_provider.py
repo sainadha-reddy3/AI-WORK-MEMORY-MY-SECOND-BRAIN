@@ -1,9 +1,9 @@
 """
 Local embedding provider.
 
-Runs all-MiniLM-L6-v2 inside this container. No network calls, no
-external service, no per-session setup — which is what makes the
-whole application portable: clone, docker compose up, and search
+Runs a multilingual embedding model inside this container. No network
+calls, no external service, no per-session setup — which is what makes
+the whole application portable: clone, docker compose up, and search
 works on any machine.
 
 Text structuring still falls back to the rule-based mock. This
@@ -14,20 +14,18 @@ from functools import lru_cache
 
 from app.ai.base import AIProvider, MemoryAnswer, StructuredMemory
 from app.ai.mock_provider import MockProvider
+from app.core.config import settings
 
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_NAME = settings.embedding_model
 
-# all-MiniLM-L6-v2 produces 384-dimensional vectors.
-LOCAL_EMBEDDING_DIM = 384
+# Stored with every vector, so vectors from different models are never
+# compared with each other by mistake.
+EMBEDDING_ID = f"local:{MODEL_NAME.split('/')[-1]}"
 
 
 @lru_cache(maxsize=1)
 def _load_model():
-    """
-    Load the model once and keep it in memory.
-
-    First call takes a second or two; every call after is instant.
-    """
+    """Load the model once and keep it in memory."""
     from sentence_transformers import SentenceTransformer
 
     return SentenceTransformer(MODEL_NAME)
@@ -35,11 +33,12 @@ def _load_model():
 
 class LocalProvider(AIProvider):
     name = "local"
+    embedding_id = EMBEDDING_ID
 
     def __init__(self) -> None:
-        # Structuring stays rule-based. A small embedding model is
-        # excellent at similarity and useless at following JSON
-        # instructions, so we don't pretend otherwise.
+        # Structuring stays rule-based. An embedding model is excellent
+        # at similarity and useless at following instructions, so we
+        # don't pretend otherwise.
         self._rules = MockProvider()
 
     def is_available(self) -> bool:
@@ -52,13 +51,14 @@ class LocalProvider(AIProvider):
     def structure_memory(self, text: str) -> StructuredMemory:
         return self._rules.structure_memory(text)
 
-    def answer_from_memories(
-        self, question: str, memories: list[dict]
-    ) -> MemoryAnswer:
+    def answer_from_memories(self, question: str, memories: list[dict]) -> MemoryAnswer:
         return self._rules.answer_from_memories(question, memories)
 
     def embed(self, text: str) -> list[float]:
         """Real semantic embedding — the reason this provider exists."""
-        model = _load_model()
-        vector = model.encode(text, normalize_embeddings=True)
+        # E5 models expect a prefix. "query: " is the recommended choice
+        # when the same function embeds both questions and memories.
+        if "e5" in MODEL_NAME.lower():
+            text = f"query: {text}"
+        vector = _load_model().encode(text, normalize_embeddings=True)
         return vector.tolist()

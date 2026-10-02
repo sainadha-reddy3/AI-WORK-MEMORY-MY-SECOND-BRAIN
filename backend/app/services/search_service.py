@@ -18,14 +18,14 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.ai import get_provider
+from app.core.config import settings
 from app.models import Attachment, Memory, MemoryEmbedding
-from app.services.embedding_service import _fit_dimensions
+from app.services.embedding_service import _fit_dimensions, embedding_key
 
-# Below this similarity, a semantic match is treated as noise.
-# Tuned against real data: unrelated content scores ~0.00, weak but
-# genuine matches land around 0.15-0.26, strong matches 0.35+.
+# Below this similarity, a semantic match is treated as noise. The
+# right value depends on the embedding model, so it lives in config.
 # Deliberately conservative — a wrong memory is worse than none.
-MIN_SEMANTIC_SIMILARITY = 0.25
+MIN_SEMANTIC_SIMILARITY = settings.semantic_threshold
 
 # Reciprocal Rank Fusion constant. 60 is the value from the original
 # paper and works well in practice.
@@ -33,7 +33,9 @@ RRF_K = 60
 
 # Common words that carry no search signal. Stripped from questions
 # so "What did I do with ArgoCD?" searches for "argocd" rather than
-# the whole sentence.
+# the whole sentence. Negations like "not" are included: as a keyword
+# they match unrelated memories ("I am not sure") far more often than
+# they help. Hedge words mark uncertainty; they shouldn't drive search.
 STOPWORDS = {
     "what", "when", "where", "who", "why", "how", "which", "did", "do",
     "does", "done", "was", "were", "is", "are", "am", "the", "a", "an",
@@ -42,7 +44,18 @@ STOPWORDS = {
     "have", "has", "had", "ever", "all", "any", "some", "show", "tell",
     "give", "find", "get", "there", "then", "so", "but", "if", "can",
     "could", "would", "should", "will", "work", "worked", "working",
+    "not", "no", "nor", "yes", "very", "just", "also", "too", "only",
+    "now", "still", "up", "out", "from", "by", "as", "be", "been",
+    "being", "its", "into", "than", "more", "most", "such", "these",
+    "those", "them", "they", "he", "she", "his", "her", "us", "off",
+    "over", "under", "again", "sure", "think", "maybe",
 }
+
+# A "word" is Latin letters/digits OR Indian-script characters
+# (U+0900–U+0D7F covers Devanagari through Malayalam, including the
+# vowel signs that a plain \w would split words on). This lets keyword
+# search work on Telugu and Hindi text too.
+WORD_PATTERN = re.compile(r"[a-z0-9\u0900-\u0D7F][a-z0-9\u0900-\u0D7F.\-_]*")
 
 
 def extract_terms(query: str) -> list[str]:
@@ -53,7 +66,7 @@ def extract_terms(query: str) -> list[str]:
     search needs terms ("argocd"). Semantic search handles sentences
     natively; this keeps the keyword half useful too.
     """
-    words = re.findall(r"[a-zA-Z0-9][a-zA-Z0-9.\-_]*", query.lower())
+    words = WORD_PATTERN.findall(query.lower())
     terms = [w for w in words if w not in STOPWORDS and len(w) > 1]
     # If stripping removed everything, fall back to the original.
     return terms or [query.strip().lower()]
@@ -68,7 +81,8 @@ class SearchHit:
 
 def keyword_search(db: Session, query: str, limit: int = 20) -> list[Memory]:
     """
-    Literal text matching across title, content and topics.
+    Literal text matching across title, content, topics and text read
+    from attached files.
 
     Matches ANY extracted term rather than the full query string, so
     a natural question still finds the memory it refers to.
@@ -100,11 +114,10 @@ def keyword_search(db: Session, query: str, limit: int = 20) -> list[Memory]:
     return list(db.execute(stmt).scalars().all())
 
 
-def semantic_search(
-    db: Session, query: str, limit: int = 20
-) -> list[tuple[Memory, float]]:
+def semantic_search(db: Session, query: str, limit: int = 20) -> list[tuple[Memory, float]]:
     """
-    Meaning-based search using pgvector.
+    Meaning-based search using pgvector — works across languages with a
+    multilingual embedding model.
 
     Returns (memory, similarity) pairs, best first. Anything below
     MIN_SEMANTIC_SIMILARITY is dropped rather than returned weakly.
@@ -128,7 +141,8 @@ def semantic_search(
     stmt = (
         select(Memory, distance.label("distance"))
         .join(MemoryEmbedding, MemoryEmbedding.memory_id == Memory.id)
-        .where(MemoryEmbedding.model == provider.name)
+        # Only compare against vectors made by the same model.
+        .where(MemoryEmbedding.model == embedding_key(provider))
         .options(selectinload(Memory.evidence))
         .order_by(distance)
         .limit(limit)
