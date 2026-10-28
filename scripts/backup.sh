@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Back up everything personal: the database and all original files.
+# Back up everything personal: the database (on Neon) and all original files.
 #
 #   ./scripts/backup.sh
 #
@@ -13,12 +13,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+set -a; source .env; set +a
+: "${NEON_DATABASE_URL:?NEON_DATABASE_URL is not set in .env}"
+
+# Tools must be at least as new as the server (Neon runs Postgres 18).
+PGIMAGE="pgvector/pgvector:pg18"
+pg() { docker run --rm -i --network host "$PGIMAGE" "$@"; }
+
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="backups/$STAMP"
 mkdir -p "$OUT"
 
-echo "→ Dumping database..."
-docker exec awm-postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$OUT/database.dump"
+echo "→ Dumping database from Neon..."
+pg pg_dump -Fc "$NEON_DATABASE_URL" > "$OUT/database.dump"
 
 echo "→ Archiving original files..."
 docker exec awm-backend sh -c 'tar -czf - -C /app/storage .' > "$OUT/storage.tar.gz"
@@ -26,8 +33,8 @@ docker exec awm-backend sh -c 'tar -czf - -C /app/storage .' > "$OUT/storage.tar
 echo "→ Recording fingerprints..."
 ( cd "$OUT" && sha256sum database.dump storage.tar.gz > SHA256SUMS )
 
-MEMORIES=$(docker exec awm-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM memories"')
-FILES=$(docker exec awm-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM attachments"')
+MEMORIES=$(pg psql "$NEON_DATABASE_URL" -tAc "SELECT count(*) FROM memories")
+FILES=$(pg psql "$NEON_DATABASE_URL" -tAc "SELECT count(*) FROM attachments")
 
 echo
 echo "✅ Backup complete: $OUT"

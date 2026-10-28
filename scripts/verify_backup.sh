@@ -3,30 +3,38 @@
 #
 #   ./scripts/verify_backup.sh backups/<timestamp>
 #
-# Checks fingerprints, restores the database into a throwaway test
-# database, counts what came back, then deletes the test database.
+# Checks fingerprints, starts a throwaway Postgres 18 server, restores the
+# backup into it, counts what came back, then deletes the throwaway server.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 DIR="${1:?Usage: ./scripts/verify_backup.sh backups/<timestamp>}"
+PGIMAGE="pgvector/pgvector:pg18"
+NAME="awm-verify"
 
 echo "→ Checking fingerprints..."
 ( cd "$DIR" && sha256sum -c SHA256SUMS )
 
-echo "→ Restoring into a throwaway database..."
-docker exec awm-postgres sh -c 'dropdb -U "$POSTGRES_USER" --if-exists awm_verify && createdb -U "$POSTGRES_USER" awm_verify'
-docker exec -i awm-postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d awm_verify --no-owner' < "$DIR/database.dump"
+echo "→ Starting a throwaway Postgres 18 server..."
+docker rm -f "$NAME" >/dev/null 2>&1 || true
+docker run -d --name "$NAME" -e POSTGRES_PASSWORD=verify "$PGIMAGE" >/dev/null
+trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
 
-RESTORED=$(docker exec awm-postgres sh -c 'psql -U "$POSTGRES_USER" -d awm_verify -tAc "SELECT count(*) FROM memories"')
-LIVE=$(docker exec awm-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM memories"')
+for _ in $(seq 1 30); do
+  docker exec "$NAME" pg_isready -U postgres >/dev/null 2>&1 && break
+  sleep 1
+done
+
+echo "→ Restoring into it..."
+docker exec -i "$NAME" pg_restore -U postgres -d postgres --no-owner --no-acl < "$DIR/database.dump"
+
+RESTORED=$(docker exec "$NAME" psql -U postgres -tAc "SELECT count(*) FROM memories")
 
 echo "→ Checking the file archive opens..."
 ARCHIVED=$(tar -tzf "$DIR/storage.tar.gz" | grep -vc '/$' || true)
 
-docker exec awm-postgres sh -c 'dropdb -U "$POSTGRES_USER" awm_verify'
-
 echo
 echo "✅ Backup verified: $DIR"
-echo "   memories in backup: $RESTORED   (live database now: $LIVE)"
+echo "   memories in backup: $RESTORED"
 echo "   files in archive:   $ARCHIVED"

@@ -3,6 +3,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: awm-postgres
+    # Kept for now as a local fallback while the app moves to Neon.
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -31,8 +32,10 @@ services:
       - ./storage:/app/storage
     environment:
       - ENVIRONMENT=${ENVIRONMENT}
-      # localhost = the Codespace itself, where postgres publishes 5432.
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+      # Permanent hosted database (Neon), read from .env.
+      # To fall back to the local container, use this line instead:
+      # - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+      - DATABASE_URL=${NEON_DATABASE_URL}
       # AI provider config. Swapping providers is a config change,
       # never a code change.
       - AI_PROVIDER=${AI_PROVIDER}

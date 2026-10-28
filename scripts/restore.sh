@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Replace the current database and files with a backup.
+# Replace the database on Neon and the local files with a backup.
 #
 #   ./scripts/restore.sh backups/<timestamp>
 #
@@ -10,13 +10,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+set -a; source .env; set +a
+: "${NEON_DATABASE_URL:?NEON_DATABASE_URL is not set in .env}"
+
 DIR="${1:?Usage: ./scripts/restore.sh backups/<timestamp>}"
+PGIMAGE="pgvector/pgvector:pg18"
 
 echo "→ Checking fingerprints..."
 ( cd "$DIR" && sha256sum -c SHA256SUMS )
 
 echo
-echo "This REPLACES your current memories and files with the backup in:"
+echo "This REPLACES your memories on Neon and your local files with:"
 echo "   $DIR"
 read -r -p "Type RESTORE to continue: " ANSWER
 if [ "$ANSWER" != "RESTORE" ]; then
@@ -27,8 +31,9 @@ fi
 echo "→ Backing up the current state first..."
 ./scripts/backup.sh
 
-echo "→ Restoring database..."
-docker exec -i awm-postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner' < "$DIR/database.dump"
+echo "→ Restoring database to Neon..."
+docker run --rm -i --network host "$PGIMAGE" \
+  pg_restore --clean --if-exists --no-owner --no-acl -d "$NEON_DATABASE_URL" < "$DIR/database.dump"
 
 echo "→ Restoring original files..."
 docker exec -i awm-backend sh -c 'rm -rf /app/storage/* && tar -xzf - -C /app/storage' < "$DIR/storage.tar.gz"

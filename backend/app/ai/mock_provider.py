@@ -12,6 +12,7 @@ production providers must.
 
 import hashlib
 import re
+from app.core.language import detect_language
 
 from app.ai.base import AIProvider, MemoryAnswer, StructuredMemory
 
