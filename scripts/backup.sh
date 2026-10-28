@@ -27,9 +27,8 @@ mkdir -p "$OUT"
 echo "→ Dumping database from Neon..."
 pg pg_dump -Fc "$NEON_DATABASE_URL" > "$OUT/database.dump"
 
-echo "→ Archiving original files..."
-docker exec awm-backend sh -c 'tar -czf - -C /app/storage .' > "$OUT/storage.tar.gz"
-
+echo "→ Archiving original files from storage..."
+docker exec awm-backend python -m app.tools.files_archive export > "$OUT/storage.tar.gz"
 echo "→ Recording fingerprints..."
 ( cd "$OUT" && sha256sum database.dump storage.tar.gz > SHA256SUMS )
 

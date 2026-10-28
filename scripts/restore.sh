@@ -36,7 +36,6 @@ docker run --rm -i --network host "$PGIMAGE" \
   pg_restore --clean --if-exists --no-owner --no-acl -d "$NEON_DATABASE_URL" < "$DIR/database.dump"
 
 echo "→ Restoring original files..."
-docker exec -i awm-backend sh -c 'rm -rf /app/storage/* && tar -xzf - -C /app/storage' < "$DIR/storage.tar.gz"
-
+docker exec -i awm-backend python -m app.tools.files_archive import < "$DIR/storage.tar.gz"
 echo
 echo "✅ Restored from $DIR"
