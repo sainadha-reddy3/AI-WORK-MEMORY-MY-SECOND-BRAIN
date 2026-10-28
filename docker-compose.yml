@@ -36,6 +36,14 @@ services:
       # To fall back to the local container, use this line instead:
       # - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
       - DATABASE_URL=${NEON_DATABASE_URL}
+      # File storage: "local" folder or "s3" (Neon Object Storage).
+      # Defaults to local until STORAGE_BACKEND is set in .env.
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-local}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_REGION=${S3_REGION}
       # AI provider config. Swapping providers is a config change,
       # never a code change.
       - AI_PROVIDER=${AI_PROVIDER}

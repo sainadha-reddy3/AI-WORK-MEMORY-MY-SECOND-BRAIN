@@ -16,11 +16,6 @@ COPY requirements-ml.txt .
 RUN pip install --no-cache-dir torch==2.4.1 --index-url https://download.pytorch.org/whl/cpu \
  && pip install --no-cache-dir -r requirements-ml.txt
 
-# Previous English-only embedding model, kept so this layer stays
-# cached. Safe to remove in a later clean-up.
-RUN python -c "from sentence_transformers import SentenceTransformer; \
-    SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
-
 # ---- Layer 1b: speech-to-text (rarely changes) ----
 COPY requirements-voice.txt .
 RUN pip install --no-cache-dir -r requirements-voice.txt

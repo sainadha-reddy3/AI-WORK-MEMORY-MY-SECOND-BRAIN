@@ -12,3 +12,4 @@ python-docx==1.1.2
 pytesseract==0.3.13
 faster-whisper==1.0.3
 tzdata==2024.2
+boto3==1.35.36

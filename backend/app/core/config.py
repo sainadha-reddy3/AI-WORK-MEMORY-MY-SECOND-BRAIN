@@ -30,8 +30,7 @@ class Settings(BaseSettings):
     ollama_embed_model: str = "nomic-embed-text"
 
     # --- Embeddings & search ----------------------------------
-    # Multilingual: understands Telugu and Hindi as well as English,
-    # so a question in one language can find a memory in another.
+    # Multilingual: understands Telugu and Hindi as well as English.
     # Must also be pre-downloaded in the Dockerfile.
     embedding_model: str = "intfloat/multilingual-e5-small"
 
@@ -39,11 +38,22 @@ class Settings(BaseSettings):
     # Depends on the embedding model — re-tune it whenever the model
     # changes. A wrong memory is worse than no memory.
     semantic_threshold: float = 0.82
+
     # --- File storage -----------------------------------------
-    # Where original files (screenshots, documents, notebook photos,
-    # voice recordings) are kept. Mounted from ./storage on the host,
+    # Where original files live: "local" (a folder) or "s3" (any
+    # S3-compatible service — Neon now, Floci in the lab, AWS later).
+    storage_backend: str = "local"
+
+    # Used when storage_backend is "local". Mounted from ./storage,
     # which is gitignored — personal files never enter Git.
     storage_dir: str = "/app/storage"
+
+    # Used when storage_backend is "s3".
+    s3_endpoint: str = ""
+    s3_bucket: str = ""
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_region: str = "us-east-1"
 
     # --- OCR --------------------------------------------------
     # Tesseract languages. "eng" is fastest and most accurate for
@@ -51,8 +61,7 @@ class Settings(BaseSettings):
     ocr_langs: str = "eng"
 
     # --- Voice ------------------------------------------------
-    # Whisper model for speech-to-text. "small" handles Telugu and
-    # Hindi far better than "base". Must also be pre-downloaded in
+    # Whisper model for speech-to-text. Must also be pre-downloaded in
     # the Dockerfile.
     whisper_model: str = "small"
 
