@@ -587,6 +587,15 @@ export default function Home() {
                 <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
                   Stored in your own database. Voice is transcribed on your machine. Never invents your history.
                 </p>
+                <button
+                  onClick={() => {
+                    window.location.href = "/api/export";
+                  }}
+                  title="Download every memory and original file as a zip"
+                  className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-white/10 px-2 py-1.5 text-[11px] text-slate-300 transition hover:border-indigo-400/40 hover:text-white"
+                >
+                  ⬇ Export everything
+                </button>
               </div>
             </div>
           </aside>

@@ -19,6 +19,8 @@ from app.api.voice import router as voice_router
 from app.core.config import settings
 from app.core.security import SESSION_COOKIE, is_valid_session
 from app.db.session import get_db
+from app.api.export import router as export_router
+
 
 app = FastAPI(
     title="AI Work Memory",
@@ -56,7 +58,7 @@ app.include_router(ask_router)
 app.include_router(topics_router)
 app.include_router(attachments_router)
 app.include_router(voice_router)
-
+app.include_router(export_router)
 
 @app.on_event("startup")
 def warm_models() -> None:
