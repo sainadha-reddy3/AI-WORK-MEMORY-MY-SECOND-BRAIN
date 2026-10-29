@@ -6,7 +6,8 @@
  */
 
 // Calls go to our own origin and are proxied to the backend by
-// next.config.ts, which avoids cross-origin requests entirely.
+// next.config.ts, which avoids cross-origin requests entirely — and
+// lets the login cookie flow automatically.
 const API_URL = "/api";
 
 /* ---------- types ---------- */
@@ -141,14 +142,23 @@ export type Transcript = {
   duration: number;
   confidence: number | null;
   unclear_segments: number;
-  // True when the output was in an unrelated writing system.
   script_mismatch: boolean;
-  // e.g. "devanagari→telugu" when converted letter by letter.
   script_converted: string | null;
   model: string;
 };
 
 /* ---------- helpers ---------- */
+
+// Every backend call goes through here. If the session is missing or
+// expired, the backend answers 401 — we send the browser to /login.
+async function request(input: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, init);
+  if (res.status === 401 && typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+    window.location.href = "/login";
+    throw new Error("Please log in.");
+  }
+  return res;
+}
 
 // Turn an error response into a readable message. FastAPI puts the
 // reason in `detail`, which is far more useful than the raw body.
@@ -163,16 +173,31 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
   return `${fallback} (${res.status})`;
 }
 
+/* ---------- auth ---------- */
+
+export async function login(password: string): Promise<void> {
+  const res = await request(`${API_URL}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "Login failed"));
+}
+
+export async function logout(): Promise<void> {
+  await request(`${API_URL}/auth/logout`, { method: "POST" });
+}
+
 /* ---------- memories ---------- */
 
 export async function listMemories(): Promise<Memory[]> {
-  const res = await fetch(`${API_URL}/memories`, { cache: "no-store" });
+  const res = await request(`${API_URL}/memories`, { cache: "no-store" });
   if (!res.ok) throw new Error(await errorMessage(res, "Failed to load memories"));
   return res.json();
 }
 
 export async function createMemory(data: MemoryCreate): Promise<Memory> {
-  const res = await fetch(`${API_URL}/memories`, {
+  const res = await request(`${API_URL}/memories`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -184,7 +209,7 @@ export async function createMemory(data: MemoryCreate): Promise<Memory> {
 // Create a memory from natural language. The AI proposes title, type
 // and topics; the response includes what was inferred.
 export async function captureMemory(text: string): Promise<CaptureResult> {
-  const res = await fetch(`${API_URL}/memories/capture`, {
+  const res = await request(`${API_URL}/memories/capture`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
@@ -196,7 +221,7 @@ export async function captureMemory(text: string): Promise<CaptureResult> {
 /* ---------- ask ---------- */
 
 export async function askQuestion(question: string): Promise<AskResponse> {
-  const res = await fetch(`${API_URL}/ask`, {
+  const res = await request(`${API_URL}/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question }),
@@ -208,13 +233,13 @@ export async function askQuestion(question: string): Promise<AskResponse> {
 /* ---------- topics ---------- */
 
 export async function listTopics(): Promise<TopicSummary[]> {
-  const res = await fetch(`${API_URL}/topics`, { cache: "no-store" });
+  const res = await request(`${API_URL}/topics`, { cache: "no-store" });
   if (!res.ok) throw new Error(await errorMessage(res, "Failed to load topics"));
   return res.json();
 }
 
 export async function getTopicHistory(topic: string): Promise<TopicHistory> {
-  const res = await fetch(`${API_URL}/topics/${encodeURIComponent(topic)}`, {
+  const res = await request(`${API_URL}/topics/${encodeURIComponent(topic)}`, {
     cache: "no-store",
   });
   if (!res.ok) throw new Error(await errorMessage(res, "Failed to load topic"));
@@ -231,7 +256,7 @@ export async function uploadAttachment(file: File, note?: string, kind?: string)
   if (note && note.trim()) form.append("note", note.trim());
   if (kind) form.append("kind", kind);
 
-  const res = await fetch(`${API_URL}/attachments`, { method: "POST", body: form });
+  const res = await request(`${API_URL}/attachments`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await errorMessage(res, "Upload failed"));
   return res.json();
 }
@@ -242,14 +267,14 @@ export function attachmentUrl(id: string): string {
 }
 
 export async function getAttachmentText(id: string): Promise<AttachmentText> {
-  const res = await fetch(`${API_URL}/attachments/${id}/text`, { cache: "no-store" });
+  const res = await request(`${API_URL}/attachments/${id}/text`, { cache: "no-store" });
   if (!res.ok) throw new Error(await errorMessage(res, "Failed to load text"));
   return res.json();
 }
 
 // Save the user's reviewed transcription. From then on it counts as confirmed.
 export async function confirmAttachmentText(id: string, text: string): Promise<AttachmentText> {
-  const res = await fetch(`${API_URL}/attachments/${id}/text`, {
+  const res = await request(`${API_URL}/attachments/${id}/text`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
@@ -267,7 +292,7 @@ export async function transcribeAudio(audio: Blob, language?: string): Promise<T
   form.append("file", audio, "recording.webm");
   if (language && language !== "auto") form.append("language", language);
 
-  const res = await fetch(`${API_URL}/voice/transcribe`, { method: "POST", body: form });
+  const res = await request(`${API_URL}/voice/transcribe`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await errorMessage(res, "Transcription failed"));
   return res.json();
 }

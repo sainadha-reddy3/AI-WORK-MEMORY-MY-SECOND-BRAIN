@@ -9,6 +9,7 @@ import {
   getAttachmentText,
   getTopicHistory,
   listMemories,
+  logout,
   transcribeAudio,
   uploadAttachment,
   type AskResponse,
@@ -387,6 +388,11 @@ export default function Home() {
     }
   }
 
+  async function handleLogout() {
+    await logout();
+    window.location.href = "/login";
+  }
+
   const eyebrow = mode === "topic" ? "Topic history" : mode === "answer" ? "Answer" : "My work memory";
 
   const title =
@@ -477,9 +483,13 @@ export default function Home() {
             <span className="hidden rounded-full border border-white/10 px-2.5 py-1 text-[11px] font-medium text-slate-400 sm:block">
               EN
             </span>
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 text-xs font-semibold text-white ring-2 ring-white/10">
+            <button
+              onClick={handleLogout}
+              title="Log out"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 text-xs font-semibold text-white ring-2 ring-white/10 transition hover:brightness-110"
+            >
               SR
-            </div>
+            </button>
           </div>
         </header>
 
@@ -1342,7 +1352,7 @@ function MemoryCard({ memory, onOpenTopic, showDate = false }: MemoryCardProps) 
     <article className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5 transition hover:border-white/10 hover:bg-white/[0.035]">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <TypeBadge type={memory.memory_type} />
-        {memory.language !== "en" && <LanguageBadge code={memory.language} />}
+        {memory.confidence === "uncertain" && <UncertainBadge />}
         {memory.language !== "en" && <LanguageBadge code={memory.language} />}
         {showDate && <span className="text-[11px] text-slate-500">{shortDate(memory.occurred_on)}</span>}
         <span className="ml-auto text-[11px] text-slate-600">{sourceLabel(memory)}</span>
