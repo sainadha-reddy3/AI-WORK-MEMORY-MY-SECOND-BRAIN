@@ -21,6 +21,10 @@ services:
 
   backend:
     build: ./backend
+    # Prebuilt by GitHub Actions and published to GitHub Container
+    # Registry. `docker compose pull backend` downloads it instead of
+    # building locally; `build` above stays as the fallback.
+    image: ghcr.io/sainadha-reddy3/ai-work-memory-my-second-brain/backend:latest
     container_name: awm-backend
     # Shares the Codespace's network stack directly.
     # Workaround for broken container-to-container forwarding here.
@@ -28,6 +32,8 @@ services:
     volumes:
       # Map the WHOLE backend folder, not just app/, so files the
       # container creates (alembic migrations) land in the repo.
+      # This also means the latest code always runs, even with an
+      # older image — the image only provides libraries and models.
       - ./backend:/app
       - ./storage:/app/storage
     environment:
