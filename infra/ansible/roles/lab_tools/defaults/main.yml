@@ -1,0 +1,10 @@
+# Tool versions — the single place to change them.
+# Pinned, so the lab is identical every time it's rebuilt.
+
+lab_tools_dir: /opt/lab-tools
+
+terraform_version: "1.9.8"
+kubectl_version: "1.31.2"
+kind_version: "0.24.0"
+helm_version: "3.16.2"
+argocd_version: "2.13.0"

@@ -1,0 +1,12 @@
+# Set up the lab machine: install every CLI tool the cloud lab needs.
+#
+#   cd infra/ansible
+#   ansible-playbook workstation.yml
+#
+# Safe to run again any time — tools already installed are skipped.
+
+- name: Prepare the local cloud lab workstation
+  hosts: workstation
+  become: true # installing into /usr/local/bin needs root
+  roles:
+    - lab_tools

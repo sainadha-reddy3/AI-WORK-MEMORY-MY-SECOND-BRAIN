@@ -1,0 +1,87 @@
+# Install each tool into /opt/lab-tools/<tool>/<version>/ and link it
+# into /usr/local/bin. A version folder that already exists is skipped,
+# which is what makes this role idempotent.
+
+- name: Make sure unzip is available (needed for the Terraform archive)
+  ansible.builtin.apt:
+    name: unzip
+    state: present
+    update_cache: true
+    cache_valid_time: 86400
+
+# ---------- Terraform (zip archive) ----------
+
+- name: Terraform — version folder
+  ansible.builtin.file:
+    path: "{{ lab_tools_dir }}/terraform/{{ terraform_version }}"
+    state: directory
+    mode: "0755"
+
+- name: Terraform — download and unpack
+  ansible.builtin.unarchive:
+    src: "https://releases.hashicorp.com/terraform/{{ terraform_version }}/terraform_{{ terraform_version }}_linux_amd64.zip"
+    dest: "{{ lab_tools_dir }}/terraform/{{ terraform_version }}"
+    remote_src: true
+    creates: "{{ lab_tools_dir }}/terraform/{{ terraform_version }}/terraform"
+
+# ---------- Helm (tar.gz archive) ----------
+
+- name: Helm — version folder
+  ansible.builtin.file:
+    path: "{{ lab_tools_dir }}/helm/{{ helm_version }}"
+    state: directory
+    mode: "0755"
+
+- name: Helm — download and unpack
+  ansible.builtin.unarchive:
+    src: "https://get.helm.sh/helm-v{{ helm_version }}-linux-amd64.tar.gz"
+    dest: "{{ lab_tools_dir }}/helm/{{ helm_version }}"
+    remote_src: true
+    extra_opts: ["--strip-components=1"] # the archive wraps helm in a linux-amd64/ folder
+    creates: "{{ lab_tools_dir }}/helm/{{ helm_version }}/helm"
+
+# ---------- Single-file binaries: kubectl, kind, argocd ----------
+
+- name: Single binaries — version folders
+  ansible.builtin.file:
+    path: "{{ lab_tools_dir }}/{{ item.name }}/{{ item.version }}"
+    state: directory
+    mode: "0755"
+  loop: &single_binaries
+    - name: kubectl
+      version: "{{ kubectl_version }}"
+      url: "https://dl.k8s.io/release/v{{ kubectl_version }}/bin/linux/amd64/kubectl"
+    - name: kind
+      version: "{{ kind_version }}"
+      url: "https://kind.sigs.k8s.io/dl/v{{ kind_version }}/kind-linux-amd64"
+    - name: argocd
+      version: "{{ argocd_version }}"
+      url: "https://github.com/argoproj/argo-cd/releases/download/v{{ argocd_version }}/argocd-linux-amd64"
+  loop_control:
+    label: "{{ item.name }} {{ item.version }}"
+
+- name: Single binaries — download
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "{{ lab_tools_dir }}/{{ item.name }}/{{ item.version }}/{{ item.name }}"
+    mode: "0755"
+  loop: *single_binaries
+  loop_control:
+    label: "{{ item.name }} {{ item.version }}"
+
+# ---------- Put every tool on the PATH ----------
+
+- name: Link each tool into /usr/local/bin
+  ansible.builtin.file:
+    src: "{{ lab_tools_dir }}/{{ item.name }}/{{ item.version }}/{{ item.name }}"
+    dest: "/usr/local/bin/{{ item.name }}"
+    state: link
+    force: true
+  loop:
+    - { name: terraform, version: "{{ terraform_version }}" }
+    - { name: helm, version: "{{ helm_version }}" }
+    - { name: kubectl, version: "{{ kubectl_version }}" }
+    - { name: kind, version: "{{ kind_version }}" }
+    - { name: argocd, version: "{{ argocd_version }}" }
+  loop_control:
+    label: "{{ item.name }} → {{ item.version }}"
