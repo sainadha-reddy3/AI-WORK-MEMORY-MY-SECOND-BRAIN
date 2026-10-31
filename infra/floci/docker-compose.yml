@@ -1,0 +1,19 @@
+# Floci — a local AWS emulator for the cloud lab.
+#
+#   cd infra/floci
+#   docker compose up -d
+#
+# Every AWS service it emulates answers on one port: 4566.
+# Kept separate from the app's own docker-compose.yml on purpose:
+# the lab can be started, stopped and reset without touching the app.
+
+services:
+  floci:
+    image: floci/floci:latest
+    container_name: awm-floci
+    ports:
+      - "4566:4566"
+    volumes:
+      # Where Floci keeps the fake resources, so they survive a restart.
+      - ./data:/app/data
+    restart: unless-stopped

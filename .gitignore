@@ -29,3 +29,8 @@ out/
 # ---- OS ----
 .DS_Store
 Thumbs.db.auth.env
+infra/floci/data/
+# Terraform: downloaded plugins and local state
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
